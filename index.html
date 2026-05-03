@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>더몬스터학원 블로그/카드뉴스 작성 도구</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; background:#f4f6f8; color:#1f2937; }
+    .wrap { max-width: 920px; margin: 40px auto; background:#fff; border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.08); padding:24px; }
+    h1 { margin:0 0 20px; font-size:24px; }
+    .field { margin-bottom:14px; }
+    label { display:block; font-weight:600; margin-bottom:8px; }
+    input, textarea { width:100%; border:1px solid #cbd5e1; border-radius:10px; padding:12px; box-sizing:border-box; font-size:14px; }
+    textarea { min-height: 480px; resize: vertical; line-height:1.6; }
+    .row { display:flex; gap:10px; margin:16px 0; }
+    button { border:none; border-radius:10px; padding:12px 16px; font-weight:700; cursor:pointer; }
+    .primary { background:#1d4ed8; color:white; }
+    .secondary { background:#e2e8f0; color:#0f172a; }
+    .status { min-height:24px; font-size:13px; color:#334155; }
+    .hint { font-size:12px; color:#64748b; margin-top:4px; }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>네이버 블로그 + 카드뉴스 작성 도구</h1>
+
+    <div class="field">
+      <label for="titleInput">제목 입력</label>
+      <input id="titleInput" type="text" placeholder="예: 중학생 수학 성적, 교과서 중심으로 올리는 법" />
+    </div>
+
+    <div class="field">
+      <label for="apiKeyInput">OpenAI API Key 입력</label>
+      <input id="apiKeyInput" type="password" placeholder="sk-..." autocomplete="off" />
+      <p class="hint">보안을 위해 키는 브라우저 메모리에서만 사용됩니다.</p>
+    </div>
+
+    <div class="row">
+      <button id="generateBtn" class="primary">자동 생성</button>
+      <button id="copyBtn" class="secondary">전체 복사</button>
+    </div>
+
+    <p id="status" class="status"></p>
+
+    <div class="field">
+      <label for="output">출력 결과</label>
+      <textarea id="output" placeholder="결과가 여기에 표시됩니다."></textarea>
+    </div>
+  </main>
+
+  <script>
+    const model = 'gpt-4.1-mini';
+
+    const generateBtn = document.getElementById('generateBtn');
+    const copyBtn = document.getElementById('copyBtn');
+    const titleInput = document.getElementById('titleInput');
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    const output = document.getElementById('output');
+    const status = document.getElementById('status');
+
+    const systemPrompt = `너는 학원 원장급 한국어 콘텐츠 작가다.
+반드시 한국어로만 작성하고, 실제 학원 원장이 학부모에게 설명하듯 자연스럽게 작성하라.
+절대 금지 단어: AI, 자동, 생성, GPT.
+과장 광고 금지, 부모 공감 중심, 상담 유도는 자연스럽게.
+총 글자 수(출력 전체): 1300~1700자.
+
+출력 형식은 아래와 정확히 동일하게 유지:
+------------------------------------------
+
+[제목 3개]
+
+1.
+2.
+3.
+
+------------------------------------------
+
+[후킹멘트]
+
+- 짧고 강한 한 문장
+
+------------------------------------------
+
+[인용구]
+
+"공감되는 한 줄 문장"
+
+------------------------------------------
+
+[카드뉴스 & 본문]
+
+[이미지 1]
+이미지 설명:
+카드뉴스 문구:
+본문:
+
+[이미지 2]
+이미지 설명:
+카드뉴스 문구:
+본문:
+
+[이미지 3]
+이미지 설명:
+카드뉴스 문구:
+본문:
+
+[이미지 4]
+이미지 설명:
+카드뉴스 문구:
+본문:
+
+(필요시 이미지 5까지 생성)
+
+------------------------------------------
+
+[마무리]
+
+- 자연스럽게 상담으로 연결
+- 반드시 "더몬스터학원" 포함
+- 상담 유도 문장 포함
+
+------------------------------------------
+
+[해시태그]
+
+- 정확히 5개`;
+
+    generateBtn.addEventListener('click', async () => {
+      const title = titleInput.value.trim();
+      const apiKey = apiKeyInput.value.trim();
+
+      if (!title) {
+        status.textContent = '제목을 입력해 주세요.';
+        return;
+      }
+      if (!apiKey) {
+        status.textContent = 'OpenAI API Key를 입력해 주세요.';
+        return;
+      }
+
+      status.textContent = '작성 중입니다. 잠시만 기다려 주세요...';
+      output.value = '';
+      generateBtn.disabled = true;
+
+      try {
+        const userPrompt = `아래 제목으로 작성해줘.\n\ntitle: ${title}\n\n타깃은 초등/중등 학부모, 메시지는 공부법/교과서 중심 학습, 톤은 학원 원장 스타일로 유지.`;
+
+        const res = await fetch('https://api.openai.com/v1/responses', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model,
+            input: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt }
+            ],
+            temperature: 0.8
+          })
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error(`요청 실패 (${res.status}): ${err}`);
+        }
+
+        const data = await res.json();
+        const text = data.output_text || '';
+        output.value = text.trim();
+        status.textContent = '완료되었습니다. 결과를 확인하고 복사해 사용하세요.';
+      } catch (error) {
+        status.textContent = `오류: ${error.message}`;
+      } finally {
+        generateBtn.disabled = false;
+      }
+    });
+
+    copyBtn.addEventListener('click', async () => {
+      if (!output.value.trim()) {
+        status.textContent = '복사할 결과가 없습니다.';
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(output.value);
+        status.textContent = '전체 결과를 복사했습니다.';
+      } catch {
+        output.select();
+        document.execCommand('copy');
+        status.textContent = '전체 결과를 복사했습니다.';
+      }
+    });
+  </script>
+</body>
+</html>
