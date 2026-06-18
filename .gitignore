@@ -1,0 +1,17 @@
+# 비밀정보 — API 키, 네이버 비밀번호가 들어있음. 절대 올리지 말 것!
+settings.json
+
+# 생성물 (이미지, 썸네일)
+output/
+
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# OS / 에디터
+.DS_Store
+.idea/
+.vscode/
