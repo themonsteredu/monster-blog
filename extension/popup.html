@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>더몬스터학원 블로그 자동화</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <h1>📝 블로그 자동화</h1>
+
+  <!-- ===== 설정 (접기) ===== -->
+  <details id="settings">
+    <summary>⚙️ 설정 (처음 한 번만)</summary>
+    <label>Claude(앤트로픽) API 키</label>
+    <input type="password" id="apiKey" placeholder="sk-ant-..." />
+    <label>전용 틀 (글 작성 규칙)</label>
+    <textarea id="template" rows="6" placeholder="비워두면 기본 규칙 사용"></textarea>
+    <button id="saveSettings" class="ghost">설정 저장</button>
+    <p class="hint">키는 이 브라우저에만 저장됩니다(외부 전송 없음).</p>
+  </details>
+
+  <!-- ===== 입력 ===== -->
+  <label>글 종류</label>
+  <select id="gltype">
+    <option>교육정보</option>
+    <option>학원·과목 특징</option>
+    <option>특강 안내</option>
+  </select>
+
+  <label>주제</label>
+  <input type="text" id="topic" placeholder="예: 4월 중간고사 수학 대비" />
+
+  <label>핵심(타겟) 검색 키워드</label>
+  <input type="text" id="keyword" placeholder="예: 광주 동구 중등 수학학원" />
+
+  <label>핵심 내용</label>
+  <textarea id="core" rows="3" placeholder="특강이면 일정·대상·수강료 / 정보글이면 다룰 포인트"></textarea>
+
+  <label>📷 사진 올리기 (직접 찍은 사진, 여러 장)</label>
+  <input type="file" id="photos" accept="image/*" multiple />
+  <div id="photoPreview" class="preview"></div>
+
+  <label>이미지 스타일 (사진 없이 쓸 때 참고)</label>
+  <select id="style">
+    <option>일러스트</option>
+    <option>실사</option>
+  </select>
+
+  <button id="generate" class="primary">✨ 글 생성</button>
+  <div id="status" class="status"></div>
+
+  <!-- ===== 결과 ===== -->
+  <div id="resultBox" style="display:none">
+    <label>제목</label>
+    <input type="text" id="outTitle" />
+    <label>본문 (수정 가능)</label>
+    <textarea id="outBody" rows="10"></textarea>
+    <div class="row">
+      <button id="copyBtn" class="ghost">📋 복사</button>
+      <button id="sendNaver" class="primary">🚀 네이버에 입력</button>
+    </div>
+    <p class="hint">네이버 블로그 글쓰기 화면을 먼저 연 뒤 "네이버에 입력"을 누르세요.</p>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
