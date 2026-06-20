@@ -229,3 +229,10 @@ function setBusy(b) {
 }
 
 loadSettings();
+
+// 팝업 제목에 버전 표시 — 업데이트가 적용됐는지 한눈에 확인용
+try {
+  const v = chrome.runtime.getManifest().version;
+  const h1 = document.querySelector("h1");
+  if (h1) h1.textContent = "📝 블로그 자동화 v" + v;
+} catch (_) {}
