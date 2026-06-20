@@ -203,6 +203,10 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
     body: document.getElementById("outBody").value,
     images: uploadedPhotos.map((p) => ({ media_type: p.media_type, data: p.data })),
   };
+  // 제목은 항상 클립보드에 복사해 둔다 (자동 입력 실패 시 붙여넣기용) — 팝업이 포커스일 때 미리
+  try {
+    await navigator.clipboard.writeText(payload.title);
+  } catch (_) {}
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
@@ -214,9 +218,11 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
     const bodyDone = rs.some((r) => r.body);
     const diag = rs.map((r) => r.diag).filter(Boolean).join("  ||  ");
     if (titleDone && bodyDone) {
-      setStatus("입력 완료! 화면을 확인하세요. 발행은 직접 눌러주세요.");
+      setStatus("✅ 제목·본문 모두 입력됐어요! 확인 후 발행하세요.");
+    } else if (bodyDone) {
+      setStatus("✅ 본문 입력 완료!\n제목은 '복사'해 뒀어요 → 네이버 제목칸 클릭하고 Ctrl+V 한 번만 하세요.");
     } else {
-      setStatus(`일부만 됨 (제목 ${titleDone ? "O" : "X"} / 본문 ${bodyDone ? "O" : "X"}). 아래 진단 캡처해 주세요.\n${diag}`, true);
+      setStatus(`본문칸을 못 찾았어요. 글쓰기 화면 새로고침(F5) 후 다시 해보세요.\n진단: ${diag}`, true);
     }
   } catch (e) {
     setStatus("입력 실패: 글쓰기 화면을 새로고침 후 다시 시도하세요.\n(" + (e && e.message ? e.message : e) + ")", true);
