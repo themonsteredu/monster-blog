@@ -1,49 +1,58 @@
 // content.js — 네이버 블로그 글쓰기(스마트에디터 ONE) 화면 안에서 실행됨
 // 팝업이 보낸 제목/본문/이미지를 에디터에 자동 입력한다.
 //
-// ★ 네이버 에디터는 구조가 자주 바뀝니다. 입력이 안 되면 아래 선택자(SELECTOR)를
-//   실제 화면 개발자도구로 확인해 수정해야 합니다.
-
-const SEL = {
-  // 제목 입력 영역(편집 가능한 곳)
-  titleEditable: [
-    ".se-section-documentTitle [contenteditable='true']",
-    ".se-documentTitle [contenteditable='true']",
-    ".se-section-documentTitle .se-text-paragraph",
-  ],
-  // 본문 입력 영역(첫 문단)
-  bodyEditable: [
-    ".se-section-text [contenteditable='true']",
-    ".se-component-content [contenteditable='true']",
-    ".se-text-paragraph[contenteditable='true']",
-  ],
-  // 사진 업로드용 숨은 input
-  fileInput: ["input[type='file']"],
-};
+// ★ 본문칸을 못 찾으면, 화면에 있는 편집영역 정보를 팝업에 알려줘서(진단) 선택자를 보정한다.
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function findOne(selectors) {
-  for (const s of selectors) {
-    const el = document.querySelector(s);
-    if (el) return el;
+function editablesIn(doc) {
+  try {
+    return Array.from(doc.querySelectorAll('[contenteditable="true"]'));
+  } catch (e) {
+    return [];
+  }
+}
+
+// 제목 편집영역 찾기
+function getTitleEditable() {
+  let el = document.querySelector(
+    '.se-documentTitle [contenteditable="true"], .se-section-documentTitle [contenteditable="true"]'
+  );
+  if (el) return el;
+  // placeholder 텍스트가 '제목' 인 영역의 편집 컨테이너
+  const ph = Array.from(document.querySelectorAll('[class*="placeholder"], .se-placeholder')).find(
+    (p) => /제목/.test(p.textContent || "")
+  );
+  if (ph) {
+    const c = ph.closest('[contenteditable="true"]');
+    if (c) return c;
   }
   return null;
 }
 
-// 편집영역에 포커스 주고 텍스트 삽입 (execCommand 가 SE 모델도 갱신함)
-function insertText(editable, text) {
-  editable.focus();
+// 본문 편집영역 찾기 (제목 영역이 아닌 편집가능 요소)
+function getBodyEditable() {
+  const eds = editablesIn(document).filter(
+    (e) => !e.closest(".se-documentTitle") && !e.closest(".se-section-documentTitle")
+  );
+  if (eds.length) return eds[0];
+  // 보조 선택자들
+  return document.querySelector(
+    '.se-component.se-text [contenteditable="true"], .se-content [contenteditable="true"], .se-text-paragraph'
+  );
+}
+
+function insertAtStart(el, text) {
+  el.focus();
   document.execCommand("selectAll", false, null);
   document.execCommand("delete", false, null);
   document.execCommand("insertText", false, text);
 }
 
-function appendText(editable, text) {
-  editable.focus();
-  // 커서를 맨 끝으로
+function appendText(el, text) {
+  el.focus();
   const range = document.createRange();
-  range.selectNodeContents(editable);
+  range.selectNodeContents(el);
   range.collapse(false);
   const sel = window.getSelection();
   sel.removeAllRanges();
@@ -60,9 +69,9 @@ function base64ToFile(base64, mediaType) {
 }
 
 async function uploadImage(img) {
-  const input = findOne(SEL.fileInput);
+  const input = document.querySelector("input[type='file']");
   if (!input) {
-    console.warn("[블로그자동화] 사진 업로드 input 을 못 찾음 — 이미지 건너뜀");
+    console.warn("[블로그자동화] 사진 업로드 input 못 찾음");
     return false;
   }
   const file = base64ToFile(img.data, img.media_type);
@@ -77,19 +86,26 @@ async function fillEditor({ title, body, images }) {
   const notes = [];
 
   // 1) 제목
-  const titleEl = findOne(SEL.titleEditable);
+  const titleEl = getTitleEditable();
   if (titleEl) {
-    insertText(titleEl, title);
+    insertAtStart(titleEl, title);
     await sleep(400);
   } else {
-    notes.push("제목 영역을 못 찾음");
+    notes.push("제목칸 못 찾음");
   }
 
-  // 2) 본문 + 이미지 (본문을 [이미지N] 기준으로 쪼갬)
-  const bodyEl = findOne(SEL.bodyEditable);
+  // 2) 본문
+  const bodyEl = getBodyEditable();
   if (!bodyEl) {
-    return { ok: false, msg: "본문 영역을 못 찾음 (선택자 수정 필요)" };
+    // 진단: 화면의 편집영역 개수와 클래스 일부를 알려준다 (선택자 보정용)
+    const all = editablesIn(document);
+    const sample = all
+      .slice(0, 8)
+      .map((e) => (e.className || e.tagName || "").toString().slice(0, 40))
+      .join(" | ");
+    return { ok: false, msg: `본문칸 못 찾음. 편집영역 ${all.length}개 [${sample}]` };
   }
+
   bodyEl.focus();
   await sleep(200);
 
@@ -100,7 +116,7 @@ async function fillEditor({ title, body, images }) {
       const seg = parts[i];
       if (seg && seg.trim()) {
         if (first) {
-          insertText(bodyEl, seg);
+          insertAtStart(bodyEl, seg);
           first = false;
         } else {
           appendText(bodyEl, "\n" + seg);
@@ -111,9 +127,11 @@ async function fillEditor({ title, body, images }) {
       const idx = parseInt(parts[i], 10) - 1;
       if (images && images[idx]) {
         const ok = await uploadImage(images[idx]);
-        if (!ok) notes.push(`[이미지${parts[i]}] 업로드 실패`);
-        await sleep(1800); // 업로드 반영 대기
-        try { bodyEl.focus(); } catch (_) {}
+        if (!ok) notes.push(`이미지${parts[i]} 업로드 실패`);
+        await sleep(1800);
+        try {
+          bodyEl.focus();
+        } catch (_) {}
       }
     }
   }
@@ -124,9 +142,7 @@ async function fillEditor({ title, body, images }) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.type !== "fill") return;
   // 에디터가 있는 프레임에서만 처리/응답
-  if (!findOne(SEL.titleEditable) && !findOne(SEL.bodyEditable)) {
-    return; // 이 프레임엔 에디터 없음 — 응답하지 않음
-  }
+  if (!getTitleEditable() && !getBodyEditable()) return;
   fillEditor(msg)
     .then((res) => sendResponse(res))
     .catch((e) => sendResponse({ ok: false, msg: String(e) }));
