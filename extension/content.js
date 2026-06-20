@@ -23,15 +23,27 @@ function getTitleEditable() {
     '[class*="ocumentTitle"] [contenteditable="true"], .se-title [contenteditable="true"], .se-documentTitle [contenteditable="true"], .se-section-documentTitle [contenteditable="true"]'
   );
   if (el) return el;
-  // 3) placeholder 노드가 '제목' 인 곳의 편집 컨테이너
-  const ph = document.querySelector('[data-placeholder*="제목"], .se-placeholder');
-  if (ph) {
-    const c = ph.matches('[contenteditable="true"]')
-      ? ph
-      : ph.closest('[contenteditable="true"]') || ph.parentElement?.querySelector('[contenteditable="true"]');
-    if (c) return c;
+  // 4) 제목 컴포넌트 안의 텍스트 문단(편집 속성이 조상에 있을 수 있음)
+  el = document.querySelector(
+    '.se-documentTitle .se-text-paragraph, .se-section-documentTitle .se-text-paragraph, [class*="ocumentTitle"] .se-text-paragraph, [class*="ocumentTitle"] .se-text'
+  );
+  if (el) {
+    const c = el.closest('[contenteditable="true"]') || el;
+    return c;
   }
   return null;
+}
+
+// 진단: 화면의 편집영역들을 클래스/placeholder 와 함께 요약 (선택자 보정용)
+function describeEditables() {
+  const eds = editablesIn(document);
+  const items = eds.slice(0, 8).map((e, i) => {
+    const ph = (e.getAttribute("data-placeholder") || "").slice(0, 14);
+    const cls = (typeof e.className === "string" ? e.className : "").slice(0, 45);
+    return `[${i}] ph="${ph}" cls="${cls}"`;
+  });
+  const files = document.querySelectorAll("input[type='file']").length;
+  return `편집영역 ${eds.length}개 | 파일input ${files}개 | ${items.join("  ")}`;
 }
 
 // 본문 편집영역 찾기 (제목 영역이 아닌 편집가능 요소)
@@ -163,7 +175,10 @@ async function fillEditor({ title, body, images }) {
     await sleep(120);
   }
 
-  return { ok: notes.length === 0, msg: notes.join(", ") };
+  const ok = notes.length === 0;
+  let msg = notes.join(", ");
+  if (!ok) msg += " :: " + describeEditables();
+  return { ok, msg };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
