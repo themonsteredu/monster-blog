@@ -121,26 +121,34 @@ async function fillEditor({ title, body, images }) {
   bodyEl.focus();
   await sleep(200);
 
-  const parts = body.split(/\[이미지\s*(\d+)\]/);
-  for (let i = 0; i < parts.length; i++) {
-    if (i % 2 === 0) {
-      const seg = parts[i];
-      if (seg && seg.trim()) {
-        moveCursorToEnd(bodyEl);
-        await typeInto(bodyEl, (i === 0 ? "" : "\n") + seg);
-        await sleep(150);
-      }
-    } else {
-      const idx = parseInt(parts[i], 10) - 1;
+  // 본문을 줄 단위로: [이미지N]=사진, [인용]=인용구, 그 외=본문 문단
+  const imgRe = /^\[이미지\s*(\d+)\]\s*$/;
+  const quoteRe = /^\[인용\]\s*(.*)$/;
+  const lines = body.split("\n");
+  let first = true;
+  for (const raw of lines) {
+    const line = raw.trim();
+    let m;
+    if ((m = line.match(imgRe))) {
+      const idx = parseInt(m[1], 10) - 1;
       if (images && images[idx]) {
         const ok = await uploadImage(images[idx]);
-        if (!ok) notes.push(`이미지${parts[i]} 업로드 실패`);
+        if (!ok) notes.push(`이미지${m[1]} 업로드 실패`);
         await sleep(1800);
-        try {
-          moveCursorToEnd(bodyEl);
-        } catch (_) {}
+        moveCursorToEnd(bodyEl);
       }
+      continue;
     }
+    if (line === "") continue;
+    moveCursorToEnd(bodyEl);
+    if ((m = line.match(quoteRe))) {
+      // 인용구: 따옴표로 감싸 한 문단으로 (네이버 인용구 스타일 적용은 다음 단계)
+      await typeInto(bodyEl, (first ? "" : "\n") + "“" + m[1] + "”");
+    } else {
+      await typeInto(bodyEl, (first ? "" : "\n") + line);
+    }
+    first = false;
+    await sleep(120);
   }
 
   return { ok: notes.length === 0, msg: notes.join(", ") };
