@@ -32,19 +32,31 @@ function getTitleEditable() {
   return null;
 }
 
-// 진단: 제목 후보(class에 'itle' 포함) 요소들을 태그/클래스/편집가능 여부와 함께 보여준다
+// 진단: 본문칸 주변 구조(부모/자식/형제)와 '제목' 속성 요소를 통째로 보여준다
 function describeEditables() {
+  const tc = (e) =>
+    e ? "<" + e.tagName + "." + ((typeof e.className === "string" ? e.className : "").trim().split(/\s+/)[0] || "") + ">" : "null";
   const out = [];
-  out.push(
-    `ed${editablesIn(document).length} file${document.querySelectorAll("input[type='file']").length} input${document.querySelectorAll("input").length} ta${document.querySelectorAll("textarea").length} iframe${document.querySelectorAll("iframe").length}`
-  );
-  document.querySelectorAll('[class*="itle"], [class*="ocumentTitle"]').forEach((e) => {
-    const ce = e.getAttribute && e.getAttribute("contenteditable");
-    const inEd = !!(e.closest && e.closest('[contenteditable="true"]'));
-    const cls = (typeof e.className === "string" ? e.className : "").slice(0, 32);
-    out.push(`<${e.tagName} ${cls} ce=${ce} inEd=${inEd ? 1 : 0}>`);
+  const eds = editablesIn(document);
+  out.push(`ed${eds.length} top${window === window.top ? 1 : 0} frames${window.frames.length}`);
+  const ed = eds[0];
+  if (ed) {
+    out.push("ED" + tc(ed));
+    out.push("PAR" + tc(ed.parentElement) + tc(ed.parentElement && ed.parentElement.parentElement));
+    out.push("CHILD" + [...ed.children].slice(0, 5).map(tc).join(""));
+    out.push("SIB" + [...(ed.parentElement ? ed.parentElement.children : [])].slice(0, 6).map(tc).join(""));
+  }
+  let n = 0;
+  document.querySelectorAll("*").forEach((e) => {
+    if (n >= 4) return;
+    const a =
+      (e.getAttribute && (e.getAttribute("placeholder") || e.getAttribute("data-placeholder") || e.getAttribute("aria-label"))) || "";
+    if (a.includes("제목")) {
+      out.push("제목칸" + tc(e) + "ce=" + (e.getAttribute("contenteditable") || "-"));
+      n++;
+    }
   });
-  return "\n[진단2] " + out.slice(0, 12).join("  ");
+  return "\n[진단3] " + out.join(" ");
 }
 
 // 본문 편집영역 찾기 (제목 영역이 아닌 편집가능 요소)
