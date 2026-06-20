@@ -190,33 +190,138 @@ document.getElementById("copyBtn").addEventListener("click", () => {
   navigator.clipboard.writeText(body).then(() => setStatus("본문을 복사했습니다."));
 });
 
-// ---------- 네이버에 입력 ----------
+// ---------- 네이버에 입력 (모든 프레임에 직접 주입) ----------
 document.getElementById("sendNaver").addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !/blog\.naver\.com/.test(tab.url || "")) {
+  if (!tab || !/naver\.com/.test(tab.url || "")) {
     setStatus("네이버 블로그 글쓰기 화면을 먼저 연 뒤 눌러주세요.", true);
     return;
   }
   setStatus("네이버 글쓰기 화면에 입력 중...");
-  chrome.tabs.sendMessage(
-    tab.id,
-    {
-      type: "fill",
-      title: document.getElementById("outTitle").value,
-      body: document.getElementById("outBody").value,
-      images: uploadedPhotos.map((p) => ({ media_type: p.media_type, data: p.data })),
-    },
-    (resp) => {
-      if (chrome.runtime.lastError) {
-        setStatus("연결 실패: 글쓰기 화면을 새로고침한 뒤 다시 시도하세요.\n(" + chrome.runtime.lastError.message + ")", true);
-      } else if (resp && resp.ok) {
-        setStatus("입력 완료! 화면을 확인하세요. 발행은 직접 눌러주세요." + (resp.msg ? "\n" + resp.msg : ""));
-      } else {
-        setStatus("일부가 안 들어갔어요. 아래 진단 내용을 캡처해 알려주세요." + (resp && resp.msg ? "\n" + resp.msg : ""), true);
-      }
+  const payload = {
+    title: document.getElementById("outTitle").value,
+    body: document.getElementById("outBody").value,
+    images: uploadedPhotos.map((p) => ({ media_type: p.media_type, data: p.data })),
+  };
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      func: fillInFrame,
+      args: [payload],
+    });
+    const rs = results.map((r) => r && r.result).filter(Boolean);
+    const titleDone = rs.some((r) => r.title);
+    const bodyDone = rs.some((r) => r.body);
+    const diag = rs.map((r) => r.diag).filter(Boolean).join("  ||  ");
+    if (titleDone && bodyDone) {
+      setStatus("입력 완료! 화면을 확인하세요. 발행은 직접 눌러주세요.");
+    } else {
+      setStatus(`일부만 됨 (제목 ${titleDone ? "O" : "X"} / 본문 ${bodyDone ? "O" : "X"}). 아래 진단 캡처해 주세요.\n${diag}`, true);
     }
-  );
+  } catch (e) {
+    setStatus("입력 실패: 글쓰기 화면을 새로고침 후 다시 시도하세요.\n(" + (e && e.message ? e.message : e) + ")", true);
+  }
 });
+
+// 각 프레임(바깥 큰 화면 + 안쪽 본문 iframe)에서 실행되는 입력 함수
+// ※ 외부 변수 참조 금지 — payload(인자)만 사용
+async function fillInFrame(payload) {
+  const { title, body, images } = payload;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const tc = (e) =>
+    e ? "<" + e.tagName + "." + ((typeof e.className === "string" ? e.className : "").trim().split(/\s+/)[0] || "") + ">" : "null";
+  const eds = [...document.querySelectorAll('[contenteditable="true"]')];
+
+  const diag = [
+    `top${window === window.top ? 1 : 0} ed${eds.length} in${document.querySelectorAll("input").length} ta${document.querySelectorAll("textarea").length} file${document.querySelectorAll("input[type=file]").length}`,
+  ];
+
+  // 제목칸 찾기 (입력칸/글자칸 모두)
+  const titleEl = document.querySelector(
+    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]'
+  );
+  // 본문칸 찾기 (제목이 아닌 편집영역)
+  const bodyEl = eds.find((e) => e !== titleEl) || null;
+
+  // 제목 입력
+  if (titleEl) {
+    titleEl.focus();
+    if (titleEl.tagName === "INPUT" || titleEl.tagName === "TEXTAREA") {
+      try {
+        const proto = titleEl.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        Object.getOwnPropertyDescriptor(proto, "value").set.call(titleEl, title);
+      } catch (_) {
+        titleEl.value = title;
+      }
+      titleEl.dispatchEvent(new Event("input", { bubbles: true }));
+      titleEl.dispatchEvent(new Event("change", { bubbles: true }));
+    } else {
+      const r = document.createRange();
+      r.selectNodeContents(titleEl);
+      r.collapse(true);
+      const s = window.getSelection();
+      s.removeAllRanges();
+      s.addRange(r);
+      document.execCommand("insertText", false, title);
+    }
+  }
+
+  // 본문 입력 (한 글자씩, [이미지N]/[인용] 처리)
+  if (bodyEl) {
+    bodyEl.focus();
+    const r = document.createRange();
+    r.selectNodeContents(bodyEl);
+    r.collapse(false);
+    const s = window.getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+    const imgRe = /^\[이미지\s*(\d+)\]\s*$/;
+    const quoteRe = /^\[인용\]\s*(.*)$/;
+    for (const raw of body.split("\n")) {
+      const line = raw.trim();
+      let m;
+      if ((m = line.match(imgRe))) {
+        const input = document.querySelector("input[type=file]");
+        const idx = parseInt(m[1], 10) - 1;
+        if (input && images[idx]) {
+          try {
+            const bin = atob(images[idx].data);
+            const arr = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+            const file = new File([arr], "photo.jpg", { type: images[idx].media_type });
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            input.files = dt.files;
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+            await sleep(1500);
+          } catch (_) {}
+        }
+        continue;
+      }
+      if (line === "") continue;
+      const text = (m = line.match(quoteRe)) ? "“" + m[1] + "”" : line;
+      for (const ch of text) {
+        document.execCommand("insertText", false, ch);
+        await sleep(8);
+      }
+      document.execCommand("insertParagraph", false, null);
+      await sleep(50);
+    }
+  }
+
+  // 제목 못 찾았으면 후보 진단
+  if (!titleEl) {
+    let n = 0;
+    document.querySelectorAll('input, textarea, [contenteditable="true"]').forEach((e) => {
+      if (n >= 5) return;
+      const ph = e.getAttribute("placeholder") || e.getAttribute("data-placeholder") || e.getAttribute("aria-label") || "-";
+      diag.push(tc(e) + "ph=" + String(ph).slice(0, 8));
+      n++;
+    });
+  }
+
+  return { title: !!titleEl, body: !!bodyEl, diag: diag.join(" ") };
+}
 
 // ---------- 보조 ----------
 function setStatus(msg, isError) {
