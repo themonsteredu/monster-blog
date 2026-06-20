@@ -15,16 +15,20 @@ function editablesIn(doc) {
 
 // 제목 편집영역 찾기
 function getTitleEditable() {
-  let el = document.querySelector(
-    '.se-documentTitle [contenteditable="true"], .se-section-documentTitle [contenteditable="true"]'
+  // 1) data-placeholder 에 '제목'
+  let el = document.querySelector('[contenteditable="true"][data-placeholder*="제목"]');
+  if (el) return el;
+  // 2) documentTitle 계열 컨테이너 안의 편집영역 (대소문자 변형 포함)
+  el = document.querySelector(
+    '[class*="ocumentTitle"] [contenteditable="true"], .se-title [contenteditable="true"], .se-documentTitle [contenteditable="true"], .se-section-documentTitle [contenteditable="true"]'
   );
   if (el) return el;
-  // placeholder 텍스트가 '제목' 인 영역의 편집 컨테이너
-  const ph = Array.from(document.querySelectorAll('[class*="placeholder"], .se-placeholder')).find(
-    (p) => /제목/.test(p.textContent || "")
-  );
+  // 3) placeholder 노드가 '제목' 인 곳의 편집 컨테이너
+  const ph = document.querySelector('[data-placeholder*="제목"], .se-placeholder');
   if (ph) {
-    const c = ph.closest('[contenteditable="true"]');
+    const c = ph.matches('[contenteditable="true"]')
+      ? ph
+      : ph.closest('[contenteditable="true"]') || ph.parentElement?.querySelector('[contenteditable="true"]');
     if (c) return c;
   }
   return null;
@@ -32,8 +36,13 @@ function getTitleEditable() {
 
 // 본문 편집영역 찾기 (제목 영역이 아닌 편집가능 요소)
 function getBodyEditable() {
+  const titleEl = getTitleEditable();
   const eds = editablesIn(document).filter(
-    (e) => !e.closest(".se-documentTitle") && !e.closest(".se-section-documentTitle")
+    (e) =>
+      e !== titleEl &&
+      !e.closest('[class*="ocumentTitle"]') &&
+      !e.closest(".se-documentTitle") &&
+      !e.closest(".se-section-documentTitle")
   );
   if (eds.length) return eds[0];
   // 보조 선택자들
@@ -80,7 +89,10 @@ function base64ToFile(base64, mediaType) {
 }
 
 async function uploadImage(img) {
-  const input = document.querySelector("input[type='file']");
+  let input =
+    document.querySelector("input[type='file']") ||
+    document.querySelector("input[accept*='image']") ||
+    document.querySelector("input.se-image-file, input[name*='file'], input[name*='image']");
   if (!input) {
     console.warn("[블로그자동화] 사진 업로드 input 못 찾음");
     return false;
