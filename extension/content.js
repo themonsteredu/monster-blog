@@ -13,37 +13,32 @@ function editablesIn(doc) {
   }
 }
 
-// 제목 편집영역 찾기
+// 제목 편집영역 찾기 (제목 전용 영역만 — 큰 래퍼를 잡지 않도록 보수적으로)
 function getTitleEditable() {
-  // 1) data-placeholder 에 '제목'
+  // 1) data-placeholder 에 '제목' 인 편집영역
   let el = document.querySelector('[contenteditable="true"][data-placeholder*="제목"]');
   if (el) return el;
-  // 2) documentTitle 계열 컨테이너 안의 편집영역 (대소문자 변형 포함)
-  el = document.querySelector(
-    '[class*="ocumentTitle"] [contenteditable="true"], .se-title [contenteditable="true"], .se-documentTitle [contenteditable="true"], .se-section-documentTitle [contenteditable="true"]'
+  // 2) documentTitle 컨테이너 '안'의 편집영역
+  const cont = document.querySelector(
+    '[class*="ocumentTitle"], .se-documentTitle, .se-section-documentTitle, .se-title'
   );
-  if (el) return el;
-  // 4) 제목 컴포넌트 안의 텍스트 문단(편집 속성이 조상에 있을 수 있음)
-  el = document.querySelector(
-    '.se-documentTitle .se-text-paragraph, .se-section-documentTitle .se-text-paragraph, [class*="ocumentTitle"] .se-text-paragraph, [class*="ocumentTitle"] .se-text'
-  );
-  if (el) {
-    const c = el.closest('[contenteditable="true"]') || el;
-    return c;
+  if (cont) {
+    const inner = cont.querySelector('[contenteditable="true"]');
+    if (inner) return inner;
   }
   return null;
 }
 
-// 진단: 화면의 편집영역들을 클래스/placeholder 와 함께 요약 (선택자 보정용)
+// 진단: 화면의 편집영역들을 placeholder/클래스와 함께 보여준다 (선택자 보정용)
 function describeEditables() {
   const eds = editablesIn(document);
-  const items = eds.slice(0, 8).map((e, i) => {
-    const ph = (e.getAttribute("data-placeholder") || "").slice(0, 14);
-    const cls = (typeof e.className === "string" ? e.className : "").slice(0, 45);
-    return `[${i}] ph="${ph}" cls="${cls}"`;
+  const lines = eds.slice(0, 10).map((e, i) => {
+    const ph = (e.getAttribute("data-placeholder") || "").slice(0, 22);
+    const cls = (typeof e.className === "string" ? e.className : "").slice(0, 55);
+    return `[${i}] "${ph}" :: ${cls}`;
   });
   const files = document.querySelectorAll("input[type='file']").length;
-  return `편집영역 ${eds.length}개 | 파일input ${files}개 | ${items.join("  ")}`;
+  return `\n[진단] 편집영역 ${eds.length}개 / 파일input ${files}개\n` + lines.join("\n");
 }
 
 // 본문 편집영역 찾기 (제목 영역이 아닌 편집가능 요소)
@@ -132,14 +127,8 @@ async function fillEditor({ title, body, images }) {
 
   // 2) 본문
   const bodyEl = getBodyEditable();
-  if (!bodyEl) {
-    // 진단: 화면의 편집영역 개수와 클래스 일부를 알려준다 (선택자 보정용)
-    const all = editablesIn(document);
-    const sample = all
-      .slice(0, 8)
-      .map((e) => (e.className || e.tagName || "").toString().slice(0, 40))
-      .join(" | ");
-    return { ok: false, msg: `본문칸 못 찾음. 편집영역 ${all.length}개 [${sample}]` };
+  if (!bodyEl || bodyEl === titleEl) {
+    return { ok: false, msg: "본문칸 못 찾음" + describeEditables() };
   }
 
   bodyEl.focus();
@@ -176,8 +165,8 @@ async function fillEditor({ title, body, images }) {
   }
 
   const ok = notes.length === 0;
-  let msg = notes.join(", ");
-  if (!ok) msg += " :: " + describeEditables();
+  // 진단을 항상 함께 보여줘서 선택자를 정확히 보정한다
+  const msg = (notes.length ? notes.join(", ") : "입력 완료") + describeEditables();
   return { ok, msg };
 }
 
