@@ -42,14 +42,13 @@ function getBodyEditable() {
   );
 }
 
-function insertAtStart(el, text) {
+function clearEditable(el) {
   el.focus();
   document.execCommand("selectAll", false, null);
   document.execCommand("delete", false, null);
-  document.execCommand("insertText", false, text);
 }
 
-function appendText(el, text) {
+function moveCursorToEnd(el) {
   el.focus();
   const range = document.createRange();
   range.selectNodeContents(el);
@@ -57,7 +56,19 @@ function appendText(el, text) {
   const sel = window.getSelection();
   sel.removeAllRanges();
   sel.addRange(range);
-  document.execCommand("insertText", false, text);
+}
+
+// 한 글자씩 입력해 '실시간으로 써지는' 효과 (네이버 에디터 호환도 더 좋음)
+async function typeInto(el, text, delay = 12) {
+  el.focus();
+  for (const ch of text) {
+    if (ch === "\n") {
+      document.execCommand("insertParagraph", false, null);
+    } else {
+      document.execCommand("insertText", false, ch);
+    }
+    if (delay) await sleep(delay);
+  }
 }
 
 function base64ToFile(base64, mediaType) {
@@ -88,8 +99,9 @@ async function fillEditor({ title, body, images }) {
   // 1) 제목
   const titleEl = getTitleEditable();
   if (titleEl) {
-    insertAtStart(titleEl, title);
-    await sleep(400);
+    clearEditable(titleEl);
+    await typeInto(titleEl, title);
+    await sleep(300);
   } else {
     notes.push("제목칸 못 찾음");
   }
@@ -110,18 +122,13 @@ async function fillEditor({ title, body, images }) {
   await sleep(200);
 
   const parts = body.split(/\[이미지\s*(\d+)\]/);
-  let first = true;
   for (let i = 0; i < parts.length; i++) {
     if (i % 2 === 0) {
       const seg = parts[i];
       if (seg && seg.trim()) {
-        if (first) {
-          insertAtStart(bodyEl, seg);
-          first = false;
-        } else {
-          appendText(bodyEl, "\n" + seg);
-        }
-        await sleep(250);
+        moveCursorToEnd(bodyEl);
+        await typeInto(bodyEl, (i === 0 ? "" : "\n") + seg);
+        await sleep(150);
       }
     } else {
       const idx = parseInt(parts[i], 10) - 1;
@@ -130,7 +137,7 @@ async function fillEditor({ title, body, images }) {
         if (!ok) notes.push(`이미지${parts[i]} 업로드 실패`);
         await sleep(1800);
         try {
-          bodyEl.focus();
+          moveCursorToEnd(bodyEl);
         } catch (_) {}
       }
     }
