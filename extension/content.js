@@ -13,7 +13,7 @@ function editablesIn(doc) {
   }
 }
 
-// 제목 편집영역 찾기 (제목 전용 영역만 — 큰 래퍼를 잡지 않도록 보수적으로)
+// 제목 편집영역 찾기 (글자칸/입력칸 모두 시도)
 function getTitleEditable() {
   // 1) data-placeholder 에 '제목' 인 편집영역
   let el = document.querySelector('[contenteditable="true"][data-placeholder*="제목"]');
@@ -23,22 +23,27 @@ function getTitleEditable() {
     '[class*="ocumentTitle"], .se-documentTitle, .se-section-documentTitle, .se-title'
   );
   if (cont) {
-    const inner = cont.querySelector('[contenteditable="true"]');
+    const inner = cont.querySelector('[contenteditable="true"], input, textarea');
     if (inner) return inner;
   }
+  // 3) data-placeholder 가 '제목' 인 요소 자체 (글자칸이 아닐 수도 — 입력칸 등)
+  el = document.querySelector('[data-placeholder*="제목"], input[placeholder*="제목"], textarea[placeholder*="제목"]');
+  if (el) return el;
   return null;
 }
 
-// 진단: 화면의 편집영역들을 placeholder/클래스와 함께 보여준다 (선택자 보정용)
+// 진단: 화면의 입력 관련 요소들을 자세히 보여준다 (선택자 보정용)
 function describeEditables() {
-  const eds = editablesIn(document);
-  const lines = eds.slice(0, 10).map((e, i) => {
-    const ph = (e.getAttribute("data-placeholder") || "").slice(0, 22);
-    const cls = (typeof e.className === "string" ? e.className : "").slice(0, 55);
-    return `[${i}] "${ph}" :: ${cls}`;
+  const out = [];
+  out.push(
+    `편집${editablesIn(document).length} fileInput${document.querySelectorAll("input[type='file']").length} input${document.querySelectorAll("input").length} textarea${document.querySelectorAll("textarea").length}`
+  );
+  document.querySelectorAll("[data-placeholder], input[placeholder], textarea[placeholder]").forEach((e) => {
+    const ph = (e.getAttribute("data-placeholder") || e.getAttribute("placeholder") || "").slice(0, 14);
+    const cls = (typeof e.className === "string" ? e.className : "").slice(0, 34);
+    out.push(`"${ph}"<${e.tagName} ${cls}>`);
   });
-  const files = document.querySelectorAll("input[type='file']").length;
-  return `\n[진단] 편집영역 ${eds.length}개 / 파일input ${files}개\n` + lines.join("\n");
+  return "\n[진단] " + out.slice(0, 14).join("  ");
 }
 
 // 본문 편집영역 찾기 (제목 영역이 아닌 편집가능 요소)
@@ -77,6 +82,19 @@ function moveCursorToEnd(el) {
 // 한 글자씩 입력해 '실시간으로 써지는' 효과 (네이버 에디터 호환도 더 좋음)
 async function typeInto(el, text, delay = 12) {
   el.focus();
+  // 입력칸(input/textarea)이면 value 로 한 번에 설정 (React 등 호환 위해 native setter 사용)
+  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+    try {
+      const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
+      setter.call(el, text);
+    } catch (_) {
+      el.value = text;
+    }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
   for (const ch of text) {
     if (ch === "\n") {
       document.execCommand("insertParagraph", false, null);
@@ -118,7 +136,7 @@ async function fillEditor({ title, body, images }) {
   // 1) 제목
   const titleEl = getTitleEditable();
   if (titleEl) {
-    clearEditable(titleEl);
+    if (titleEl.tagName !== "INPUT" && titleEl.tagName !== "TEXTAREA") clearEditable(titleEl);
     await typeInto(titleEl, title);
     await sleep(300);
   } else {
