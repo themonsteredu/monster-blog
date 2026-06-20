@@ -32,18 +32,19 @@ function getTitleEditable() {
   return null;
 }
 
-// 진단: 화면의 입력 관련 요소들을 자세히 보여준다 (선택자 보정용)
+// 진단: 제목 후보(class에 'itle' 포함) 요소들을 태그/클래스/편집가능 여부와 함께 보여준다
 function describeEditables() {
   const out = [];
   out.push(
-    `편집${editablesIn(document).length} fileInput${document.querySelectorAll("input[type='file']").length} input${document.querySelectorAll("input").length} textarea${document.querySelectorAll("textarea").length}`
+    `ed${editablesIn(document).length} file${document.querySelectorAll("input[type='file']").length} input${document.querySelectorAll("input").length} ta${document.querySelectorAll("textarea").length} iframe${document.querySelectorAll("iframe").length}`
   );
-  document.querySelectorAll("[data-placeholder], input[placeholder], textarea[placeholder]").forEach((e) => {
-    const ph = (e.getAttribute("data-placeholder") || e.getAttribute("placeholder") || "").slice(0, 14);
-    const cls = (typeof e.className === "string" ? e.className : "").slice(0, 34);
-    out.push(`"${ph}"<${e.tagName} ${cls}>`);
+  document.querySelectorAll('[class*="itle"], [class*="ocumentTitle"]').forEach((e) => {
+    const ce = e.getAttribute && e.getAttribute("contenteditable");
+    const inEd = !!(e.closest && e.closest('[contenteditable="true"]'));
+    const cls = (typeof e.className === "string" ? e.className : "").slice(0, 32);
+    out.push(`<${e.tagName} ${cls} ce=${ce} inEd=${inEd ? 1 : 0}>`);
   });
-  return "\n[진단] " + out.slice(0, 14).join("  ");
+  return "\n[진단2] " + out.slice(0, 12).join("  ");
 }
 
 // 본문 편집영역 찾기 (제목 영역이 아닌 편집가능 요소)
