@@ -210,9 +210,9 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
       if (chrome.runtime.lastError) {
         setStatus("연결 실패: 글쓰기 화면을 새로고침한 뒤 다시 시도하세요.\n(" + chrome.runtime.lastError.message + ")", true);
       } else if (resp && resp.ok) {
-        setStatus("입력 시도 완료! 화면을 확인하세요. 발행은 직접 눌러주세요.");
+        setStatus("입력 완료! 화면을 확인하세요. 발행은 직접 눌러주세요." + (resp.msg ? "\n" + resp.msg : ""));
       } else {
-        setStatus("입력은 했지만 일부가 안 들어갔을 수 있어요. 화면을 확인해 주세요." + (resp && resp.msg ? "\n" + resp.msg : ""), true);
+        setStatus("일부가 안 들어갔어요. 아래 진단 내용을 캡처해 알려주세요." + (resp && resp.msg ? "\n" + resp.msg : ""), true);
       }
     }
   );
