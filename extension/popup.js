@@ -287,19 +287,32 @@ async function fillInFrame(payload) {
       const line = raw.trim();
       let m;
       if ((m = line.match(imgRe))) {
-        const input = document.querySelector("input[type=file]");
         const idx = parseInt(m[1], 10) - 1;
-        if (input && images[idx]) {
+        if (images[idx]) {
           try {
             const bin = atob(images[idx].data);
             const arr = new Uint8Array(bin.length);
             for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-            const file = new File([arr], "photo.jpg", { type: images[idx].media_type });
-            const dt = new DataTransfer();
-            dt.items.add(file);
-            input.files = dt.files;
-            input.dispatchEvent(new Event("change", { bubbles: true }));
-            await sleep(1500);
+            const file = new File([arr], "photo_" + m[1] + ".jpg", { type: images[idx].media_type });
+            // 1) 드래그&드롭 흉내 (네이버 에디터가 실제로 사진을 받는 방식)
+            try {
+              const dt = new DataTransfer();
+              dt.items.add(file);
+              const mk = (t) => new DragEvent(t, { bubbles: true, cancelable: true, composed: true, dataTransfer: dt });
+              bodyEl.dispatchEvent(mk("dragenter"));
+              bodyEl.dispatchEvent(mk("dragover"));
+              bodyEl.dispatchEvent(mk("drop"));
+              await sleep(1800);
+            } catch (_) {}
+            // 2) 파일 input 도 시도 (있으면)
+            const input = document.querySelector("input[type=file]");
+            if (input) {
+              const dt2 = new DataTransfer();
+              dt2.items.add(file);
+              input.files = dt2.files;
+              input.dispatchEvent(new Event("change", { bubbles: true }));
+              await sleep(1500);
+            }
           } catch (_) {}
         }
         continue;
