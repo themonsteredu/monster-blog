@@ -216,11 +216,12 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
     const rs = results.map((r) => r && r.result).filter(Boolean);
     const titleDone = rs.some((r) => r.title);
     const bodyDone = rs.some((r) => r.body);
+    const imgDone = rs.reduce((s, r) => s + (r.image || 0), 0);
     const diag = rs.map((r) => r.diag).filter(Boolean).join("  ||  ");
-    if (titleDone && bodyDone) {
-      setStatus("✅ 제목·본문 모두 입력됐어요! 확인 후 발행하세요.");
-    } else if (bodyDone) {
-      setStatus("✅ 본문 입력 완료!\n제목은 '복사'해 뒀어요 → 네이버 제목칸 클릭하고 Ctrl+V 한 번만 하세요.");
+    const imgNote = imgDone > 0 ? `사진 ${imgDone}장 넣음` : "사진은 [이미지N] 자리에 직접 끌어다 놓으세요";
+    if (bodyDone) {
+      const titleNote = titleDone ? "제목·본문 입력됨" : "본문 입력됨 · 제목은 복사해뒀어요(제목칸 클릭 후 Ctrl+V)";
+      setStatus(`✅ ${titleNote}\n🖼️ ${imgNote}\n확인 후 발행하세요.`);
     } else {
       setStatus(`본문칸을 못 찾았어요. 글쓰기 화면 새로고침(F5) 후 다시 해보세요.\n진단: ${diag}`, true);
     }
@@ -328,6 +329,28 @@ async function fillInFrame(payload) {
     }
   }
 
+  // 이미지 업로드: 사진칸(파일 input)은 본문과 다른 프레임에 있을 수 있으므로,
+  // 이 프레임에 파일 input 이 있으면 여기서 순서대로 업로드한다.
+  let imgDone = 0;
+  const fInput = document.querySelector('input[type=file]');
+  if (fInput && images && images.length) {
+    for (const im of images) {
+      try {
+        const bin = atob(im.data);
+        const arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        const f = new File([arr], "photo.jpg", { type: im.media_type });
+        const dt = new DataTransfer();
+        dt.items.add(f);
+        fInput.files = dt.files;
+        fInput.dispatchEvent(new Event("change", { bubbles: true }));
+        imgDone++;
+        await sleep(1500);
+      } catch (_) {}
+    }
+  }
+  diag.push("img" + imgDone + "/" + (images ? images.length : 0));
+
   // 제목 못 찾았으면 후보 진단
   if (!titleEl) {
     let n = 0;
@@ -339,7 +362,7 @@ async function fillInFrame(payload) {
     });
   }
 
-  return { title: !!titleEl, body: !!bodyEl, diag: diag.join(" ") };
+  return { title: !!titleEl, body: !!bodyEl, image: imgDone, diag: diag.join(" ") };
 }
 
 // ---------- 보조 ----------
