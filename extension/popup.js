@@ -301,8 +301,9 @@ async function fillInFrame(payload) {
   const titleEl = document.querySelector(
     'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]'
   );
-  // 본문칸 찾기 (제목이 아닌 편집영역)
-  const bodyEl = eds.find((e) => e !== titleEl) || null;
+  // 본문칸 찾기 — 이 프레임에 '제목칸'이 있으면 여긴 제목 프레임이므로 본문은 넣지 않는다.
+  // (제목은 바깥 프레임, 본문은 안쪽 iframe 으로 분리돼 있어서 섞이면 안 됨)
+  const bodyEl = titleEl ? null : eds.find((e) => e !== titleEl) || null;
 
   // 제목 입력
   if (titleEl) {
