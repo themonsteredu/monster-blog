@@ -243,29 +243,44 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
   }
 });
 
-// MAIN 월드에서 네이버 에디터 내부 전역/함수를 탐지 (이미지 삽입 API 찾기)
+// MAIN 월드에서 네이버 에디터 내부의 '이미지 삽입 함수' 경로를 깊이 탐지
 function probeEditorApi() {
   try {
     const out = [];
-    out.push("top" + (window === window.top ? 1 : 0));
-    const keys = Object.keys(window).filter((k) =>
-      /^(se|sm|edit|photo|image|attach|upload|nhn|oEditor|SE|__)/i.test(k) || /editor|smart|photo|attach/i.test(k)
-    );
-    if (keys.length) out.push("K:" + keys.slice(0, 22).join(","));
-    ["oEditors", "SmartEditor", "seEditor", "__se", "nhn", "$se", "SE", "se_editor", "SEHelper", "editorController"].forEach((g) => {
+    out.push("t" + (window === window.top ? 1 : 0));
+    // 이미지/사진/업로드 관련 전역 이름 전체
+    const g = Object.keys(window).filter((k) => /photo|image|attach|insert|upload/i.test(k));
+    if (g.length) out.push("G[" + g.slice(0, 12).join(",") + "]");
+    // 주요 네임스페이스를 2단계까지 파고들어 이미지 관련 키 탐색
+    const dig = (obj, name, depth) => {
+      if (!obj || depth > 2) return;
+      let ks;
       try {
-        if (window[g]) out.push("HAS:" + g + "(" + typeof window[g] + ")");
+        ks = Object.keys(obj);
+      } catch (_) {
+        return;
+      }
+      const hit = ks.filter((k) => /photo|image|attach|insertImage|addImage|upload/i.test(k));
+      if (hit.length) out.push(name + "{" + hit.slice(0, 10).join(",") + "}");
+      if (depth < 2) {
+        ks.slice(0, 40).forEach((k) => {
+          try {
+            const v = obj[k];
+            if (v && typeof v === "object" && /photo|image|editor|content|component|se|attach/i.test(k)) {
+              dig(v, name + "." + k, depth + 1);
+            }
+          } catch (_) {}
+        });
+      }
+    };
+    ["SE", "nhn", "SmartEditor"].forEach((n) => {
+      try {
+        dig(window[n], n, 0);
       } catch (_) {}
     });
-    // React fiber 로 에디터 컴포넌트 탐지
-    const ce = document.querySelector('[contenteditable="true"]');
-    if (ce) {
-      const fk = Object.keys(ce).find((k) => k.startsWith("__reactFiber") || k.startsWith("__reactInternal"));
-      if (fk) out.push("REACT_FIBER");
-    }
-    return out.join(" ");
+    return out.join("  ");
   } catch (e) {
-    return "probeErr:" + (e && e.message ? e.message : e);
+    return "err:" + (e && e.message ? e.message : e);
   }
 }
 
