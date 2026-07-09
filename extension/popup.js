@@ -273,6 +273,31 @@ async function fillInFrame(payload) {
     }
   }
 
+  // 네이버 '인용구' 툴바 버튼 찾기 (이 프레임 + 바깥 프레임)
+  const findQuoteBtn = () => {
+    const sels = [
+      '[data-name="quotation"]',
+      'button[data-name="quotation"]',
+      '[data-log*="quot"]',
+      'button[class*="quotation"]',
+      '[class*="quotation"] button',
+      'button[aria-label*="인용"]',
+      '[aria-label*="인용"]',
+      'button[title*="인용"]',
+      '[title*="인용"]',
+    ];
+    for (const sel of sels) {
+      let b = document.querySelector(sel);
+      if (b) return b;
+      try {
+        const tb = window.top.document.querySelector(sel);
+        if (tb) return tb;
+      } catch (_) {}
+    }
+    return null;
+  };
+  let quoteBtnUsed = 0;
+
   // 본문 입력 (한 글자씩, [이미지N]/[인용] 처리)
   if (bodyEl) {
     bodyEl.focus();
@@ -319,8 +344,38 @@ async function fillInFrame(payload) {
         continue;
       }
       if (line === "") continue;
-      const text = (m = line.match(quoteRe)) ? "“" + m[1] + "”" : line;
-      for (const ch of text) {
+
+      // 인용구: 문장 타이핑 → 그 줄 선택 → 네이버 '인용구' 버튼 클릭
+      if ((m = line.match(quoteRe))) {
+        const qtext = m[1];
+        for (const ch of qtext) {
+          document.execCommand("insertText", false, ch);
+          await sleep(6);
+        }
+        // 방금 타이핑한 문장(현재 줄) 선택
+        try {
+          window.getSelection().modify("extend", "backward", "lineboundary");
+        } catch (_) {}
+        await sleep(80);
+        const qbtn = findQuoteBtn();
+        if (qbtn) {
+          try {
+            qbtn.click();
+            quoteBtnUsed++;
+            await sleep(250);
+          } catch (_) {}
+        }
+        // 선택 풀고 다음 줄로
+        try {
+          window.getSelection().collapseToEnd();
+        } catch (_) {}
+        document.execCommand("insertParagraph", false, null);
+        await sleep(60);
+        continue;
+      }
+
+      // 일반 문장
+      for (const ch of line) {
         document.execCommand("insertText", false, ch);
         await sleep(8);
       }
@@ -349,7 +404,19 @@ async function fillInFrame(payload) {
       } catch (_) {}
     }
   }
-  diag.push("img" + imgDone + "/" + (images ? images.length : 0));
+  diag.push("img" + imgDone + "/" + (images ? images.length : 0) + " quoteBtn" + quoteBtnUsed);
+  // 인용구 버튼 후보 진단 (못 눌렀을 때 참고용)
+  if (quoteBtnUsed === 0) {
+    let qn = 0;
+    document.querySelectorAll("button,[role=button]").forEach((b) => {
+      if (qn >= 3) return;
+      const l = (b.getAttribute("aria-label") || b.getAttribute("title") || b.className || "").toString();
+      if (/인용|quot/i.test(l)) {
+        diag.push("QBTN" + tc(b) + "|" + l.slice(0, 18));
+        qn++;
+      }
+    });
+  }
 
   // 제목 못 찾았으면 후보 진단
   if (!titleEl) {
@@ -362,7 +429,7 @@ async function fillInFrame(payload) {
     });
   }
 
-  return { title: !!titleEl, body: !!bodyEl, image: imgDone, diag: diag.join(" ") };
+  return { title: !!titleEl, body: !!bodyEl, image: imgDone, quote: quoteBtnUsed, diag: diag.join(" ") };
 }
 
 // ---------- 보조 ----------
