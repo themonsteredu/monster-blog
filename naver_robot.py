@@ -141,22 +141,70 @@ def _open_writer(driver):
             pass
 
 
+def _count_images(driver):
+    """현재 본문에 들어간 이미지 개수를 센다 (업로드 성공 여부 확인용)."""
+    try:
+        return len(driver.find_elements(By.CSS_SELECTOR, ".se-image, .se-component-image, img.se-image-resource"))
+    except Exception:
+        return 0
+
+
+def _find_file_input(driver):
+    """네이버 글쓰기 화면에서 '사진 업로드용' 숨은 <input type=file> 을 찾는다.
+    이미지 전용 선택자를 먼저 시도하고, 없으면 일반 파일 input 을 쓴다."""
+    # 이미지 전용으로 보이는 input 을 우선 (accept 에 image 가 들어간 것 등)
+    for sel in (
+        "input[type='file'][accept*='image']",
+        ".se-toolbar-item-image input[type='file']",
+        ".se-image input[type='file']",
+        "input.se-image-file-input",
+    ):
+        found = driver.find_elements(By.CSS_SELECTOR, sel)
+        if found:
+            return found[-1]
+    # 그래도 없으면 일반 파일 input (여러 개면 마지막 것)
+    found = driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
+    return found[-1] if found else None
+
+
 def _upload_image(driver, path):
     """현재 커서 위치에 이미지 파일을 업로드(삽입)한다.
-    네이버 글쓰기의 숨은 <input type='file'> 에 경로를 보내는 방식."""
+    네이버 글쓰기의 숨은 <input type='file'> 에 경로를 보내는 방식.
+    성공하면 True, 실패/건너뜀이면 False 를 돌려준다."""
     abspath = os.path.abspath(path)
     if not os.path.exists(abspath):
-        print(f"이미지 파일 없음, 건너뜀: {abspath}")
-        return
-    inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
-    if not inputs:
-        print("파일 업로드 input 을 못 찾음 — 이미지 삽입 건너뜀 (화면 보며 선택자 보완 필요).")
-        return
+        print(f"  ✗ 이미지 파일 없음, 건너뜀: {abspath}")
+        return False
+
+    file_input = _find_file_input(driver)
+    if file_input is None:
+        # 어떤 파일 input 도 못 찾음 — 왜 안 됐는지 알 수 있게 상세히 남긴다.
+        all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
+        print(
+            "  ✗ 파일 업로드 칸(input[type=file])을 못 찾아 이미지 삽입을 건너뜁니다.\n"
+            f"     (현재 화면에서 찾은 파일 input 개수: {len(all_inputs)}개)\n"
+            "     → 네이버 글쓰기 화면 구조가 바뀌었을 수 있습니다. 화면을 보며 선택자 보완이 필요합니다."
+        )
+        return False
+
+    before = _count_images(driver)
     try:
-        inputs[-1].send_keys(abspath)  # OS 파일창을 거치지 않고 바로 업로드
-        time.sleep(3)
+        file_input.send_keys(abspath)  # OS 파일창을 거치지 않고 바로 업로드
     except Exception as e:
-        print(f"이미지 업로드 실패({path}): {e}")
+        print(f"  ✗ 이미지 업로드 실패({os.path.basename(path)}): {e}")
+        return False
+
+    # 업로드가 실제로 반영될 때까지 기다린다 (이미지 개수가 늘어나면 성공).
+    for _ in range(15):  # 최대 약 15초
+        time.sleep(1)
+        if _count_images(driver) > before:
+            print(f"  ✓ 이미지 삽입 완료: {os.path.basename(path)}")
+            return True
+    print(
+        f"  △ 파일 경로는 보냈지만 이미지가 본문에 나타났는지 확인 못 함: {os.path.basename(path)}\n"
+        "     (업로드가 느리거나 실패했을 수 있습니다. 크롬 창을 직접 확인해 주세요.)"
+    )
+    return False
 
 
 def _insert_body_with_images(driver, body, image_paths):
@@ -167,6 +215,16 @@ def _insert_body_with_images(driver, body, image_paths):
 
     # parts: [텍스트0, "1", 텍스트1, "2", 텍스트2, ...]
     parts = re.split(r"\[이미지\s*(\d+)\]", body)
+    marker_count = len(parts) // 2  # 본문에서 찾은 [이미지N] 자리 개수
+
+    # 이미지 파일은 있는데 본문에 [이미지N] 표시가 하나도 없으면 그대로 두면 이미지가 안 들어간다.
+    if image_paths and marker_count == 0:
+        print(
+            "⚠ 본문에 [이미지N] 표시가 없어 이미지를 넣을 자리를 못 찾았습니다.\n"
+            f"   (준비된 이미지 {len(image_paths)}장을 본문 맨 끝에 이어서 넣습니다.)"
+        )
+
+    inserted = 0
     for i, seg in enumerate(parts):
         if i % 2 == 0:
             if seg.strip():
@@ -175,14 +233,31 @@ def _insert_body_with_images(driver, body, image_paths):
         else:
             idx = int(seg) - 1
             if 0 <= idx < len(image_paths):
-                print(f"[이미지{seg}] 자리에 이미지 업로드: {image_paths[idx]}")
-                _upload_image(driver, image_paths[idx])
+                print(f"[이미지{seg}] 자리에 이미지 업로드 시도: {image_paths[idx]}")
+                if _upload_image(driver, image_paths[idx]):
+                    inserted += 1
                 # 이미지 삽입 후 다시 본문 영역에 포커스
                 try:
                     driver.find_element(By.CSS_SELECTOR, ".se-section-text").click()
                 except Exception:
                     pass
                 time.sleep(0.5)
+            else:
+                print(f"⚠ [이미지{seg}] 표시는 있는데 대응하는 이미지 파일이 없습니다. (건너뜀)")
+
+    # 자리 표시가 없어서 못 넣은 이미지는 본문 끝에 이어붙인다.
+    if marker_count == 0 and image_paths:
+        for p in image_paths:
+            if _upload_image(driver, p):
+                inserted += 1
+            try:
+                driver.find_element(By.CSS_SELECTOR, ".se-section-text").click()
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+    if image_paths:
+        print(f"이미지 삽입 결과: {inserted}/{len(image_paths)}장 성공.")
 
 
 def publish_draft(naver_id, naver_pw, title, body, image_paths=None):
