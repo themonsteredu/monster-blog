@@ -278,6 +278,21 @@ function probeEditorApi() {
         dig(window[n], n, 0);
       } catch (_) {}
     });
+    // 사진 관련 전역의 구조(메서드/키) 덤프
+    ["PhotoEditorApp", "photoContent", "photoUploader", "photoAttacher", "PhotoUploader"].forEach((n) => {
+      try {
+        const o = window[n];
+        if (!o) return;
+        out.push(n + "=" + typeof o);
+        if (typeof o === "object") out.push(n + "{" + Object.keys(o).slice(0, 18).join(",") + "}");
+        if (typeof o === "function") {
+          const pk = Object.getOwnPropertyNames(o.prototype || {}).filter((k) => k !== "constructor");
+          if (pk.length) out.push(n + ".proto{" + pk.slice(0, 18).join(",") + "}");
+          const sk = Object.getOwnPropertyNames(o).filter((k) => !/length|name|prototype|arguments|caller/.test(k));
+          if (sk.length) out.push(n + ".static{" + sk.slice(0, 12).join(",") + "}");
+        }
+      } catch (_) {}
+    });
     return out.join("  ");
   } catch (e) {
     return "err:" + (e && e.message ? e.message : e);
