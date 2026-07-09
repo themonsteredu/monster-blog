@@ -345,38 +345,17 @@ async function fillInFrame(payload) {
       }
       if (line === "") continue;
 
-      // 인용구: 문장 타이핑 → 그 문장 '길이만큼만' 정확히 선택 → 인용구 버튼 클릭 → 박스 밖으로 커서 이동
+      // 인용구: 박스 자동은 네이버가 엉뚱하게 묶어 글을 망치므로, 짧은 '별도 줄'로만 넣는다.
+      // (박스가 필요하면 그 줄만 선택 후 인용구 버튼 클릭 → 원하는 스타일 선택)
       if ((m = line.match(quoteRe))) {
         const qtext = m[1];
         for (const ch of qtext) {
           document.execCommand("insertText", false, ch);
-          await sleep(6);
+          await sleep(8);
         }
-        // 방금 타이핑한 글자 수만큼만 뒤로 선택 (과선택 방지)
-        try {
-          const sel = window.getSelection();
-          for (let i = 0; i < qtext.length; i++) sel.modify("extend", "backward", "character");
-        } catch (_) {}
-        await sleep(80);
-        const qbtn = findQuoteBtn();
-        if (qbtn) {
-          try {
-            qbtn.click();
-            quoteBtnUsed++;
-            await sleep(250);
-          } catch (_) {}
-        }
-        // 커서를 본문 맨 끝(인용구 박스 밖)으로 이동해 다음 글이 박스 안에 안 들어가게
-        try {
-          const r2 = document.createRange();
-          r2.selectNodeContents(bodyEl);
-          r2.collapse(false);
-          const s2 = window.getSelection();
-          s2.removeAllRanges();
-          s2.addRange(r2);
-        } catch (_) {}
         document.execCommand("insertParagraph", false, null);
-        await sleep(60);
+        document.execCommand("insertParagraph", false, null); // 인용 문장 앞뒤로 한 줄 띄워 눈에 띄게
+        await sleep(50);
         continue;
       }
 
