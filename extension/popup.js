@@ -217,11 +217,24 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
     const titleDone = rs.some((r) => r.title);
     const bodyDone = rs.some((r) => r.body);
     const imgDone = rs.reduce((s, r) => s + (r.image || 0), 0);
-    const diag = rs.map((r) => r.diag).filter(Boolean).join("  ||  ");
-    const imgNote = imgDone > 0 ? `사진 ${imgDone}장 넣음` : "사진은 [이미지N] 자리에 직접 끌어다 놓으세요";
+    let diag = rs.map((r) => r.diag).filter(Boolean).join("  ||  ");
+    // 네이버 에디터 내부 함수 탐지 (MAIN 월드) — 이미지 자동 삽입 API 찾기용
+    if (imgDone === 0) {
+      try {
+        const probe = await chrome.scripting.executeScript({
+          target: { tabId: tab.id, allFrames: true },
+          world: "MAIN",
+          func: probeEditorApi,
+        });
+        const probeStr = probe.map((p) => p && p.result).filter((x) => x && x.length > 4).join("  ||  ");
+        if (probeStr) diag += "  ==PROBE== " + probeStr;
+      } catch (_) {}
+    }
+    const imgNote = imgDone > 0 ? `사진 ${imgDone}장 넣음` : "사진 자동 실패 — 아래 진단 캡처해 주세요";
     if (bodyDone) {
       const titleNote = titleDone ? "제목·본문 입력됨" : "본문 입력됨 · 제목은 복사해뒀어요(제목칸 클릭 후 Ctrl+V)";
-      setStatus(`✅ ${titleNote}\n🖼️ ${imgNote}\n확인 후 발행하세요.`);
+      const msg = `✅ ${titleNote}\n🖼️ ${imgNote}` + (imgDone === 0 ? `\n진단: ${diag}` : "\n확인 후 발행하세요.");
+      setStatus(msg, imgDone === 0);
     } else {
       setStatus(`본문칸을 못 찾았어요. 글쓰기 화면 새로고침(F5) 후 다시 해보세요.\n진단: ${diag}`, true);
     }
@@ -229,6 +242,32 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
     setStatus("입력 실패: 글쓰기 화면을 새로고침 후 다시 시도하세요.\n(" + (e && e.message ? e.message : e) + ")", true);
   }
 });
+
+// MAIN 월드에서 네이버 에디터 내부 전역/함수를 탐지 (이미지 삽입 API 찾기)
+function probeEditorApi() {
+  try {
+    const out = [];
+    out.push("top" + (window === window.top ? 1 : 0));
+    const keys = Object.keys(window).filter((k) =>
+      /^(se|sm|edit|photo|image|attach|upload|nhn|oEditor|SE|__)/i.test(k) || /editor|smart|photo|attach/i.test(k)
+    );
+    if (keys.length) out.push("K:" + keys.slice(0, 22).join(","));
+    ["oEditors", "SmartEditor", "seEditor", "__se", "nhn", "$se", "SE", "se_editor", "SEHelper", "editorController"].forEach((g) => {
+      try {
+        if (window[g]) out.push("HAS:" + g + "(" + typeof window[g] + ")");
+      } catch (_) {}
+    });
+    // React fiber 로 에디터 컴포넌트 탐지
+    const ce = document.querySelector('[contenteditable="true"]');
+    if (ce) {
+      const fk = Object.keys(ce).find((k) => k.startsWith("__reactFiber") || k.startsWith("__reactInternal"));
+      if (fk) out.push("REACT_FIBER");
+    }
+    return out.join(" ");
+  } catch (e) {
+    return "probeErr:" + (e && e.message ? e.message : e);
+  }
+}
 
 // 각 프레임(바깥 큰 화면 + 안쪽 본문 iframe)에서 실행되는 입력 함수
 // ※ 외부 변수 참조 금지 — payload(인자)만 사용
