@@ -345,16 +345,17 @@ async function fillInFrame(payload) {
       }
       if (line === "") continue;
 
-      // 인용구: 문장 타이핑 → 그 줄 선택 → 네이버 '인용구' 버튼 클릭
+      // 인용구: 문장 타이핑 → 그 문장 '길이만큼만' 정확히 선택 → 인용구 버튼 클릭 → 박스 밖으로 커서 이동
       if ((m = line.match(quoteRe))) {
         const qtext = m[1];
         for (const ch of qtext) {
           document.execCommand("insertText", false, ch);
           await sleep(6);
         }
-        // 방금 타이핑한 문장(현재 줄) 선택
+        // 방금 타이핑한 글자 수만큼만 뒤로 선택 (과선택 방지)
         try {
-          window.getSelection().modify("extend", "backward", "lineboundary");
+          const sel = window.getSelection();
+          for (let i = 0; i < qtext.length; i++) sel.modify("extend", "backward", "character");
         } catch (_) {}
         await sleep(80);
         const qbtn = findQuoteBtn();
@@ -365,9 +366,14 @@ async function fillInFrame(payload) {
             await sleep(250);
           } catch (_) {}
         }
-        // 선택 풀고 다음 줄로
+        // 커서를 본문 맨 끝(인용구 박스 밖)으로 이동해 다음 글이 박스 안에 안 들어가게
         try {
-          window.getSelection().collapseToEnd();
+          const r2 = document.createRange();
+          r2.selectNodeContents(bodyEl);
+          r2.collapse(false);
+          const s2 = window.getSelection();
+          s2.removeAllRanges();
+          s2.addRange(r2);
         } catch (_) {}
         document.execCommand("insertParagraph", false, null);
         await sleep(60);
