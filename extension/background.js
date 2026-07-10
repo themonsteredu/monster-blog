@@ -219,33 +219,11 @@ function countImages() {
   };
 }
 
-// 인용구 처리 1단계 (본문 프레임에서만): 방금 '막 타이핑한' 인용 줄을 커서 기준으로 선택하고,
-// 인용구 툴바 버튼의 화면 좌표(맨 바깥 기준)를 계산해 돌려준다.
-// ※ DOM 문단 구조(.se-text-paragraph)에 의존하지 않는다 — 네이버 구조가 달라도 동작하도록
-//   브라우저 Selection.modify 로 "커서에서 줄 앞까지"를 선택한다.
-// 버튼 클릭은 배경에서 '진짜 마우스 클릭'(CDP)으로 한다 — 가짜 click()은 네이버가 무시함.
-function prepQuote() {
-  const tSel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  if (document.querySelector(tSel)) return null;
-  const bodyEl = document.querySelector('[contenteditable="true"]');
-  if (!bodyEl) return null;
-  const s = window.getSelection();
-  // 커서가 이 본문 안에 있어야 함 (방금 인용 줄을 타이핑한 프레임만 통과)
-  if (!s || s.rangeCount === 0) return { diag: "커서없음" };
-  let node = s.anchorNode;
-  if (!(node && bodyEl.contains(node))) return { diag: "커서밖" };
-  bodyEl.focus();
-  // 커서(줄 끝)에서 줄 맨 앞까지 선택
-  try {
-    s.collapseToEnd();
-    s.modify("extend", "backward", "lineboundary");
-  } catch (_) {
-    return { diag: "선택불가" };
-  }
-  const selLen = s.toString().length;
-  if (selLen === 0) return { diag: "선택0" };
-  // 인용구 버튼 좌표 (이 프레임 → 바깥 프레임)
+// 인용구/지도용 공통: 요소의 화면 좌표(맨 바깥 기준) 계산 문자열은 각 함수 안에 복제되어 있음
+// (executeScript 로 주입되는 함수는 외부 변수 참조 불가)
+
+// 인용구 버튼(+ 옆 ▾ 화살표) 좌표 — 어느 프레임이든 찾으면 반환
+function quoteBtnPoint() {
   const toTop = (el, win) => {
     const rr = el.getBoundingClientRect();
     if (!rr.width || !rr.height) return null;
@@ -265,23 +243,27 @@ function prepQuote() {
     return { x: Math.round(x), y: Math.round(y) };
   };
   const btnSel =
-    '[data-name="quotation"], button[data-log*="quotation"], button[aria-label*="인용"], button[title*="인용"], [class*="quotation"] button, button[class*="quotation"]';
+    '[data-name="quotation"], button[data-log*="quotation"], button[aria-label*="인용"], button[title*="인용"], button[class*="quotation"]';
   let btn = document.querySelector(btnSel);
-  let win = window;
   if (!btn) {
-    try {
-      btn = window.top.document.querySelector(btnSel);
-      win = window.top;
-    } catch (_) {}
+    btn = [...document.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "인용구");
   }
-  if (!btn) return { diag: "버튼없음sel" + selLen };
-  const pt = toTop(btn, win);
-  if (!pt) return { diag: "버튼좌표없음" };
-  const qcount = document.querySelectorAll(".se-quotation, .se-component-quotation, blockquote, [class*='quotation']").length;
-  return { btn: pt, qcount, sel: selLen, diag: "" };
+  if (!btn) return null;
+  const pt = toTop(btn, window);
+  if (!pt) return null;
+  // 옆의 펼침(▾) 버튼: 같은 부모 안의 다른 클릭 요소
+  let arrow = null;
+  const wrap = btn.parentElement;
+  if (wrap) {
+    const others = [...wrap.querySelectorAll("button, [role='button']")].filter(
+      (b) => b !== btn && !btn.contains(b) && !b.contains(btn) && b.getBoundingClientRect().width > 0
+    );
+    if (others[0]) arrow = toTop(others[0], window);
+  }
+  return { btn: pt, arrow };
 }
 
-// 인용구 처리 2단계: 버튼 클릭 후 열린 스타일 목록에서 '세로줄(line)' 항목의 좌표를 찾는다
+// 인용구 버튼 클릭 후 열린 스타일 목록에서 '세로줄(line)' 항목의 좌표
 function quoteStyleOption() {
   const toTop = (el, win) => {
     const rr = el.getBoundingClientRect();
@@ -305,48 +287,163 @@ function quoteStyleOption() {
     (typeof x.className === "string" ? x.className : "") +
     (x.getAttribute("data-value") || "") +
     (x.getAttribute("data-name") || "") +
-    (x.getAttribute("data-log") || "");
-  const docs = [[document, window]];
-  try {
-    if (window.top !== window) docs.push([window.top.document, window.top]);
-  } catch (_) {}
-  for (const dw of docs) {
-    const d = dw[0], w = dw[1];
-    // 열린 레이어/드롭다운 안의 인용구 스타일 항목들
-    const els = [...d.querySelectorAll('[class*="layer"] button, [class*="list"] button, li button, button, li')].filter((x) => {
-      const v = idv(x);
-      if (!/quotation/i.test(v)) return false;
-      if (/toolbar/i.test(v)) return false; // 툴바 본체 버튼 제외
-      const rr = x.getBoundingClientRect();
-      return rr.width > 0 && rr.height > 0;
-    });
-    let o = els.find((x) => /line|vertical/i.test(idv(x)));
-    if (!o && els.length > 1) o = els[1];
-    if (!o && els.length === 1) o = els[0];
-    if (o) {
-      const pt = toTop(o, w);
-      if (pt) return { pt, id: idv(o).slice(0, 30) };
-    }
+    (x.getAttribute("data-log") || "") +
+    (x.getAttribute("aria-label") || "") +
+    (x.getAttribute("title") || "");
+  const els = [...document.querySelectorAll("button, [role='button'], li, a")].filter((x) => {
+    const rr = x.getBoundingClientRect();
+    if (!rr.width || !rr.height) return false;
+    return /quotation|인용/i.test(idv(x)) || /세로/.test((x.textContent || "").trim());
+  });
+  // 세로줄 우선 → 목록의 두 번째(보통 1번이 기본 따옴표) → 아무거나
+  let o = els.find((x) => /line|vertical/i.test(idv(x)) || /세로/.test(idv(x) + (x.textContent || "")));
+  if (!o) {
+    const opts = els.filter((x) => /option|list|layer/i.test(idv(x)) || x.tagName === "LI");
+    if (opts.length > 1) o = opts[1];
+    else if (opts.length === 1) o = opts[0];
   }
-  return null;
+  if (!o) return null;
+  const pt = toTop(o, window);
+  return pt ? { pt, id: idv(o).slice(0, 40), n: els.length } : null;
 }
 
-// 인용구 처리 3단계: 박스가 실제로 생겼는지 확인하고 커서를 본문 끝으로
-function quoteFinish(prevCount) {
+// 본문 프레임의 인용구 박스 개수 + 마지막 박스의 글자수
+function quoteCount() {
   const tSel =
     'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
   if (document.querySelector(tSel)) return null;
   const bodyEl = document.querySelector('[contenteditable="true"]');
   if (!bodyEl) return null;
-  const now = document.querySelectorAll(".se-quotation, .se-component-quotation, blockquote").length;
-  bodyEl.focus();
-  const r = document.createRange();
-  r.selectNodeContents(bodyEl);
-  r.collapse(false);
+  const qs = bodyEl.querySelectorAll(".se-quotation, .se-component-quotation, blockquote, [class*='quotation']");
+  const last = qs[qs.length - 1];
+  return { n: qs.length, lastLen: last ? (last.textContent || "").trim().length : -1 };
+}
+
+// 커서 위치 그대로 타이핑 (빈 인용구 박스 '안'에 문장을 넣을 때 사용 — 끝으로 이동하지 않음)
+async function typeHere(text) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const tSel =
+    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
+  if (document.querySelector(tSel)) return false;
+  const bodyEl = document.querySelector('[contenteditable="true"]');
+  if (!bodyEl) return false;
   const s = window.getSelection();
-  s.removeAllRanges();
-  s.addRange(r);
-  return { ok: now > prevCount, now };
+  if (!s || !s.anchorNode || !bodyEl.contains(s.anchorNode)) return false;
+  for (const ch of text) {
+    document.execCommand("insertText", false, ch);
+    await sleep(8);
+  }
+  return true;
+}
+
+// ---------- 지도(장소) 첨부용 ----------
+
+function mapBtnPoint() {
+  const toTop = (el, win) => {
+    const rr = el.getBoundingClientRect();
+    if (!rr.width || !rr.height) return null;
+    let x = rr.left + rr.width / 2;
+    let y = rr.top + rr.height / 2;
+    try {
+      let w = win;
+      while (w !== w.top) {
+        const fr = w.frameElement.getBoundingClientRect();
+        x += fr.left;
+        y += fr.top;
+        w = w.parent;
+      }
+    } catch (_) {
+      return null;
+    }
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+  const sel = '[data-name="map"], button[data-log*="map"], button[aria-label*="장소"], button[title*="장소"]';
+  let btn = document.querySelector(sel);
+  if (!btn) btn = [...document.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "장소");
+  return btn ? toTop(btn, window) : null;
+}
+
+function mapSearchPoint() {
+  const toTop = (el, win) => {
+    const rr = el.getBoundingClientRect();
+    if (!rr.width || !rr.height) return null;
+    let x = rr.left + rr.width / 2;
+    let y = rr.top + rr.height / 2;
+    try {
+      let w = win;
+      while (w !== w.top) {
+        const fr = w.frameElement.getBoundingClientRect();
+        x += fr.left;
+        y += fr.top;
+        w = w.parent;
+      }
+    } catch (_) {
+      return null;
+    }
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+  const ins = [...document.querySelectorAll("input")].filter((i) => {
+    const rr = i.getBoundingClientRect();
+    if (!rr.width || !rr.height) return false;
+    const ph = (i.placeholder || "") + (i.getAttribute("aria-label") || "") + (i.className || "");
+    return /장소|위치|검색|place|search/i.test(ph);
+  });
+  return ins[0] ? toTop(ins[0], window) : null;
+}
+
+function mapResultPoint(q) {
+  const toTop = (el, win) => {
+    const rr = el.getBoundingClientRect();
+    if (!rr.width || !rr.height) return null;
+    let x = rr.left + rr.width / 2;
+    let y = rr.top + rr.height / 2;
+    try {
+      let w = win;
+      while (w !== w.top) {
+        const fr = w.frameElement.getBoundingClientRect();
+        x += fr.left;
+        y += fr.top;
+        w = w.parent;
+      }
+    } catch (_) {
+      return null;
+    }
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+  const items = [...document.querySelectorAll("li")].filter((x) => {
+    const rr = x.getBoundingClientRect();
+    return rr.width > 0 && rr.height > 0 && (x.textContent || "").indexOf(q) !== -1;
+  });
+  const it = items[0];
+  if (!it) return null;
+  const addBtn = [...it.querySelectorAll("button")].find((b) => /추가|선택/.test((b.textContent || "").trim()));
+  return toTop(addBtn || it, window);
+}
+
+function mapConfirmPoint() {
+  const toTop = (el, win) => {
+    const rr = el.getBoundingClientRect();
+    if (!rr.width || !rr.height) return null;
+    let x = rr.left + rr.width / 2;
+    let y = rr.top + rr.height / 2;
+    try {
+      let w = win;
+      while (w !== w.top) {
+        const fr = w.frameElement.getBoundingClientRect();
+        x += fr.left;
+        y += fr.top;
+        w = w.parent;
+      }
+    } catch (_) {
+      return null;
+    }
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+  const btn = [...document.querySelectorAll("button")].find((b) => {
+    const rr = b.getBoundingClientRect();
+    return rr.width > 0 && rr.height > 0 && /^(확인|추가|완료|등록)$/.test((b.textContent || "").trim());
+  });
+  return btn ? toTop(btn, window) : null;
 }
 
 // 예비 1: 가짜 paste 이벤트 (에디터가 스크립트 paste 를 받아줄 경우)
@@ -394,15 +491,20 @@ async function clickAt(tabId, pt) {
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: pt.x, y: pt.y, button: "left", clickCount: 1 });
 }
 
-// 진짜 Enter 키로 줄바꿈 — 스크립트 줄바꿈은 네이버가 무시해 문단이 붙어버림
+// 진짜 Enter 키 (현재 포커스 위치에)
+async function pressEnter(tabId) {
+  const key = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
+  await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", text: "\r", unmodifiedText: "\r", ...key });
+  await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...key });
+  await sleep(60);
+}
+
+// 본문 끝에서 진짜 Enter 로 줄바꿈 — 스크립트 줄바꿈은 네이버가 무시해 문단이 붙어버림
 async function sendEnter(tabId, attached) {
   await execAll(tabId, focusBodyEnd);
   if (attached) {
-    const key = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
     try {
-      await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", text: "\r", unmodifiedText: "\r", ...key });
-      await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...key });
-      await sleep(60);
+      await pressEnter(tabId);
       return;
     } catch (_) {}
   }
@@ -628,39 +730,65 @@ async function fillNaver(tabId, payload) {
           }
         }
       } else if (seg.t === "quote") {
+        // 순서: 빈 인용구 박스를 먼저 만들고(▾화살표→세로줄 우선) → 그 '안'에 문장을 타이핑.
+        // 선택(드래그)을 흉내내는 방식은 네이버 내부 모델이 무시해서 빈 박스가 됐었음.
         await say(tabId, "인용구 넣는 중…");
         await sendEnter(tabId, attached); // 인용 앞 여백
-        // 인용 줄을 타이핑 (커서는 줄 끝에 남는다 — 아직 Enter 치지 않음)
-        const typed = (await execAll(tabId, typeOneLine, [seg.text], notes, "quote")).some(Boolean);
-        if (typed) bodyTyped = true;
-        await sleep(120);
-        // 방금 친 줄을 선택 + 인용구 버튼 좌표 → 진짜 마우스 클릭으로 박스 적용
         let quoteApplied = false;
         if (attached) {
-          const preps = (await execAll(tabId, prepQuote, [], notes, "quotePrep")).filter(Boolean);
-          const prep = preps.find((p) => p && p.btn);
-          if (prep) {
+          const before = (await execAll(tabId, quoteCount)).filter(Boolean)[0] || { n: 0 };
+          const bp = (await execAll(tabId, quoteBtnPoint)).filter(Boolean)[0];
+          if (bp) {
             try {
-              await clickAt(tabId, prep.btn);
-              await sleep(600);
-              const opt = (await execAll(tabId, quoteStyleOption)).filter(Boolean)[0];
-              if (opt && opt.pt) {
-                await clickAt(tabId, opt.pt);
-                await sleep(500);
+              await execAll(tabId, focusBodyEnd);
+              let opened = false;
+              if (bp.arrow) {
+                // ▾ 화살표 → 스타일 목록 → 세로줄
+                await clickAt(tabId, bp.arrow);
+                await sleep(600);
+                const opt = (await execAll(tabId, quoteStyleOption)).filter(Boolean)[0];
+                if (opt && opt.pt) {
+                  await clickAt(tabId, opt.pt);
+                  await sleep(600);
+                  opened = true;
+                  notes.push("인용스타일:" + opt.id);
+                }
               }
-              const fins = (await execAll(tabId, quoteFinish, [prep.qcount || 0])).filter(Boolean);
-              quoteApplied = fins.some((f) => f && f.ok);
-              if (!quoteApplied) notes.push("인용:박스무반응" + (opt ? " opt:" + opt.id : " 스타일없음"));
+              if (!opened) {
+                // 화살표가 없으면 본 버튼 (마지막 사용 스타일로 삽입됨)
+                await clickAt(tabId, bp.btn);
+                await sleep(600);
+                const opt = (await execAll(tabId, quoteStyleOption)).filter(Boolean)[0];
+                if (opt && opt.pt) {
+                  await clickAt(tabId, opt.pt);
+                  await sleep(600);
+                }
+              }
+              // 커서가 새 빈 박스 안에 있음 → 문장을 그 자리에 타이핑
+              const typedIn = (await execAll(tabId, typeHere, [seg.text], notes, "quoteType")).some(Boolean);
+              const after = (await execAll(tabId, quoteCount)).filter(Boolean)[0] || { n: 0, lastLen: -1 };
+              quoteApplied = typedIn && after.n > (before.n || 0) && after.lastLen > 0;
+              if (quoteApplied) bodyTyped = true;
+              else notes.push("인용:박스" + (after.n > (before.n || 0) ? "생김" : "안생김") + " 안글자" + after.lastLen + (typedIn ? "" : " 타이핑실패"));
+              // 박스 밖으로 탈출 (아래 방향키)
+              const dk = { key: "ArrowDown", code: "ArrowDown", windowsVirtualKeyCode: 40, nativeVirtualKeyCode: 40 };
+              await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...dk });
+              await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...dk });
+              await sleep(150);
             } catch (e) {
               notes.push("인용:" + (e && e.message ? e.message : e));
             }
           } else {
-            notes.push("인용:" + (preps.map((p) => p && p.diag).filter(Boolean).join("/") || "준비실패"));
+            notes.push("인용:버튼못찾음");
           }
         } else {
           notes.push("인용:디버거없음");
         }
-        // 인용 블록 밖으로 나가 다음 문단을 위한 줄바꿈
+        if (!quoteApplied) {
+          // 자동 박스 실패 → 문장을 일반 문단으로라도 남긴다
+          const typed = (await execAll(tabId, typeOneLine, [seg.text], notes, "quote")).some(Boolean);
+          if (typed) bodyTyped = true;
+        }
         await execAll(tabId, focusBodyEnd);
         await sendEnter(tabId, attached);
       } else {
@@ -670,6 +798,42 @@ async function fillNaver(tabId, payload) {
         await say(tabId, `사진 ${seg.idx + 1} 넣는 중… (클립보드 붙여넣기)`);
         const how = await insertImage(tabId, im, attached, notes);
         if (how) imgOk++;
+      }
+    }
+
+    // 6.5) 지도(장소) 첨부 — 장소 버튼 → "더몬스터학원" 검색 → 첫 결과 추가 (실험 기능)
+    let mapOk = false;
+    if (attached) {
+      try {
+        await say(tabId, "지도(장소) 첨부 중…");
+        const mb = (await execAll(tabId, mapBtnPoint)).filter(Boolean)[0];
+        if (mb) {
+          await execAll(tabId, focusBodyEnd);
+          await clickAt(tabId, mb);
+          await sleep(1500);
+          const sp = (await execAll(tabId, mapSearchPoint)).filter(Boolean)[0];
+          if (sp) {
+            await clickAt(tabId, sp);
+            await sleep(250);
+            await cdp(tabId, "Input.insertText", { text: "더몬스터학원" });
+            await sleep(250);
+            await pressEnter(tabId);
+            await sleep(2200);
+            const rp = (await execAll(tabId, mapResultPoint, ["더몬스터"])).filter(Boolean)[0];
+            if (rp) {
+              await clickAt(tabId, rp);
+              await sleep(800);
+              const cf = (await execAll(tabId, mapConfirmPoint)).filter(Boolean)[0];
+              if (cf) {
+                await clickAt(tabId, cf);
+                await sleep(1200);
+                mapOk = true;
+              } else notes.push("지도:확인버튼없음");
+            } else notes.push("지도:검색결과없음");
+          } else notes.push("지도:검색창없음");
+        } else notes.push("지도:장소버튼없음");
+      } catch (e) {
+        notes.push("지도:" + (e && e.message ? e.message : e));
       }
     }
 
@@ -690,13 +854,14 @@ async function fillNaver(tabId, payload) {
         ? `사진 ${imgOk}장 모두 넣었습니다`
         : `사진 ${imgOk}/${imgTotal}장`
       : "";
-    const quoteNotes = notes.filter((n) => n.indexOf("인용") === 0);
+    const quoteNotes = notes.filter((n) => n.indexOf("인용:") === 0);
     const quoteNote = quoteNotes.length ? "인용구 박스 일부 실패(문장은 들어감) — " + quoteNotes.slice(0, 2).join(" | ") : "";
+    const mapNote = mapOk ? "지도 첨부됨 (위치 확인해 주세요)" : "지도 자동첨부 실패 — 장소 버튼에서 '더몬스터학원' 검색하면 됩니다";
     const hasIssue = (imgTotal > 0 && imgOk < imgTotal) || quoteNotes.length > 0;
-    const diagLine = hasIssue ? "\n진단: " + notes.slice(0, 5).join(" | ") : "";
+    const diagLine = hasIssue || !mapOk ? "\n진단: " + notes.slice(0, 6).join(" | ") : "";
     await say(
       tabId,
-      `✅ ${titleNote}${imgNote ? "\n🖼️ " + imgNote : ""}${quoteNote ? "\n💬 " + quoteNote : ""}\n내용 확인 후 발행해 주세요.${diagLine}`,
+      `✅ ${titleNote}${imgNote ? "\n🖼️ " + imgNote : ""}${quoteNote ? "\n💬 " + quoteNote : ""}\n📍 ${mapNote}\n내용 확인 후 발행해 주세요.${diagLine}`,
       hasIssue,
       40000
     );
