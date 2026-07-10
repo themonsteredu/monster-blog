@@ -213,25 +213,16 @@ function countImages() {
   };
 }
 
-// 본문 프레임에서만 동작: 방금 입력한 인용 문단(prefix 포함, 뒤에서부터 탐색)만 선택해
-// 네이버 인용구 버튼을 눌러 세로줄 박스 적용. 실패해도 문장은 남아 글이 망가지지 않는다.
-async function applyQuoteBox(prefix) {
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// 인용구 처리 1단계 (본문 프레임에서만): 방금 쓴 인용 문단을 선택하고,
+// 인용구 툴바 버튼의 화면 좌표(맨 바깥 기준)를 계산해 돌려준다.
+// 버튼 클릭은 배경에서 '진짜 마우스 클릭'(CDP)으로 한다 — 가짜 click()은 네이버가 무시함.
+function prepQuote(prefix) {
   const tSel =
     'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
   if (document.querySelector(tSel)) return null;
   const bodyEl = document.querySelector('[contenteditable="true"]');
   if (!bodyEl) return null;
-  const toEnd = () => {
-    bodyEl.focus();
-    const r = document.createRange();
-    r.selectNodeContents(bodyEl);
-    r.collapse(false);
-    const s = window.getSelection();
-    s.removeAllRanges();
-    s.addRange(r);
-  };
-  // 1) 인용 문단 찾기 (뒤에서부터)
+  // 1) 인용 문단 찾기 (뒤에서부터) + 선택
   const paras = [...bodyEl.querySelectorAll(".se-text-paragraph, p")];
   let target = null;
   for (let i = paras.length - 1; i >= 0; i--) {
@@ -240,60 +231,114 @@ async function applyQuoteBox(prefix) {
       break;
     }
   }
-  if (!target) return { ok: false, diag: "문단못찾음p" + paras.length };
-  // 2) 그 문단만 선택
+  if (!target) return { diag: "문단못찾음p" + paras.length };
   const r = document.createRange();
   r.selectNodeContents(target);
   const s = window.getSelection();
   s.removeAllRanges();
   s.addRange(r);
-  await sleep(150);
-  // 3) 인용구 버튼 클릭 (이 프레임 → 바깥 프레임)
+  // 2) 인용구 버튼 좌표 (이 프레임 → 바깥 프레임)
+  const toTop = (el, win) => {
+    const rr = el.getBoundingClientRect();
+    if (!rr.width || !rr.height) return null;
+    let x = rr.left + rr.width / 2;
+    let y = rr.top + rr.height / 2;
+    try {
+      let w = win;
+      while (w !== w.top) {
+        const fr = w.frameElement.getBoundingClientRect();
+        x += fr.left;
+        y += fr.top;
+        w = w.parent;
+      }
+    } catch (_) {
+      return null;
+    }
+    return { x: Math.round(x), y: Math.round(y) };
+  };
   const btnSel =
     '[data-name="quotation"], button[data-log*="quotation"], button[aria-label*="인용"], button[title*="인용"], button[class*="quotation"]';
   let btn = document.querySelector(btnSel);
-  let doc = document;
+  let win = window;
   if (!btn) {
     try {
       btn = window.top.document.querySelector(btnSel);
-      doc = window.top.document;
+      win = window.top;
     } catch (_) {}
   }
-  if (!btn) return { ok: false, diag: "버튼없음" };
-  btn.click();
-  await sleep(400);
-  // 4) 스타일 목록이 떴으면 '세로줄(line)' 스타일 선택
-  let picked = "";
-  for (const d of [doc, document]) {
-    const opts = [...d.querySelectorAll('button, [role="button"], li')].filter((x) => {
-      if (x === btn) return false;
-      const idv =
-        (typeof x.className === "string" ? x.className : "") +
-        (x.getAttribute("data-value") || "") +
-        (x.getAttribute("data-name") || "") +
-        (x.getAttribute("data-log") || "");
-      return /quotation/i.test(idv);
+  if (!btn) return { diag: "버튼없음" };
+  const pt = toTop(btn, win);
+  if (!pt) return { diag: "버튼좌표없음" };
+  const qcount = document.querySelectorAll(".se-quotation, .se-component-quotation, blockquote").length;
+  return { btn: pt, qcount, diag: "" };
+}
+
+// 인용구 처리 2단계: 버튼 클릭 후 열린 스타일 목록에서 '세로줄(line)' 항목의 좌표를 찾는다
+function quoteStyleOption() {
+  const toTop = (el, win) => {
+    const rr = el.getBoundingClientRect();
+    if (!rr.width || !rr.height) return null;
+    let x = rr.left + rr.width / 2;
+    let y = rr.top + rr.height / 2;
+    try {
+      let w = win;
+      while (w !== w.top) {
+        const fr = w.frameElement.getBoundingClientRect();
+        x += fr.left;
+        y += fr.top;
+        w = w.parent;
+      }
+    } catch (_) {
+      return null;
+    }
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+  const idv = (x) =>
+    (typeof x.className === "string" ? x.className : "") +
+    (x.getAttribute("data-value") || "") +
+    (x.getAttribute("data-name") || "") +
+    (x.getAttribute("data-log") || "");
+  const docs = [[document, window]];
+  try {
+    if (window.top !== window) docs.push([window.top.document, window.top]);
+  } catch (_) {}
+  for (const dw of docs) {
+    const d = dw[0], w = dw[1];
+    // 열린 레이어/드롭다운 안의 인용구 스타일 항목들
+    const els = [...d.querySelectorAll('[class*="layer"] button, [class*="list"] button, li button, button, li')].filter((x) => {
+      const v = idv(x);
+      if (!/quotation/i.test(v)) return false;
+      if (/toolbar/i.test(v)) return false; // 툴바 본체 버튼 제외
+      const rr = x.getBoundingClientRect();
+      return rr.width > 0 && rr.height > 0;
     });
-    let o = opts.find((x) => {
-      const idv =
-        (typeof x.className === "string" ? x.className : "") +
-        (x.getAttribute("data-value") || "") +
-        (x.getAttribute("data-name") || "") +
-        (x.getAttribute("data-log") || "");
-      return /line|vertical/i.test(idv);
-    });
-    if (!o && opts.length) o = opts[Math.min(1, opts.length - 1)];
+    let o = els.find((x) => /line|vertical/i.test(idv(x)));
+    if (!o && els.length > 1) o = els[1];
+    if (!o && els.length === 1) o = els[0];
     if (o) {
-      o.click();
-      picked =
-        (o.getAttribute("data-value") || o.getAttribute("data-name") || (typeof o.className === "string" ? o.className : "")).slice(0, 24);
-      break;
+      const pt = toTop(o, w);
+      if (pt) return { pt, id: idv(o).slice(0, 30) };
     }
   }
-  await sleep(300);
-  // 5) 커서를 인용 블록 밖(본문 끝)으로
-  toEnd();
-  return { ok: true, diag: "스타일:" + (picked || "기본") };
+  return null;
+}
+
+// 인용구 처리 3단계: 박스가 실제로 생겼는지 확인하고 커서를 본문 끝으로
+function quoteFinish(prevCount) {
+  const tSel =
+    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
+  if (document.querySelector(tSel)) return null;
+  const bodyEl = document.querySelector('[contenteditable="true"]');
+  if (!bodyEl) return null;
+  const now = document.querySelectorAll(".se-quotation, .se-component-quotation, blockquote").length;
+  bodyEl.focus();
+  const r = document.createRange();
+  r.selectNodeContents(bodyEl);
+  r.collapse(false);
+  const s = window.getSelection();
+  s.removeAllRanges();
+  s.addRange(r);
+  return { ok: now > prevCount, now };
 }
 
 // 예비 1: 가짜 paste 이벤트 (에디터가 스크립트 paste 를 받아줄 경우)
@@ -332,6 +377,13 @@ function syntheticDrop(b64, type) {
   bodyEl.dispatchEvent(mk("dragover"));
   bodyEl.dispatchEvent(mk("drop"));
   return true;
+}
+
+// 진짜 마우스 클릭 (CDP) — 가짜 click() 은 네이버 툴바가 무시함
+async function clickAt(tabId, pt) {
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y });
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: pt.x, y: pt.y, button: "left", clickCount: 1 });
+  await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: pt.x, y: pt.y, button: "left", clickCount: 1 });
 }
 
 // 진짜 Enter 키로 줄바꿈 — 스크립트 줄바꿈은 네이버가 무시해 문단이 붙어버림
@@ -573,9 +625,32 @@ async function fillNaver(tabId, payload) {
         const typed = (await execAll(tabId, typeOneLine, [seg.text], notes, "quote")).some(Boolean);
         if (typed) bodyTyped = true;
         await sendEnter(tabId, attached); // 인용 문단 뒤 빈 문단 (박스 밖 탈출용)
-        const rs = (await execAll(tabId, applyQuoteBox, [seg.text.slice(0, 6)], notes, "quoteBox")).filter(Boolean);
-        const q = rs.find((x) => x && x.ok);
-        if (!q) notes.push("인용:" + (rs.map((x) => x && x.diag).filter(Boolean).join("/") || "무반응"));
+        // 인용 문단 선택 + 인용구 버튼 좌표 → 진짜 마우스 클릭으로 박스 적용
+        let quoteApplied = false;
+        if (attached) {
+          const preps = (await execAll(tabId, prepQuote, [seg.text.slice(0, 6)], notes, "quotePrep")).filter(Boolean);
+          const prep = preps.find((p) => p && p.btn);
+          if (prep) {
+            try {
+              await clickAt(tabId, prep.btn);
+              await sleep(500);
+              const opt = (await execAll(tabId, quoteStyleOption)).filter(Boolean)[0];
+              if (opt && opt.pt) {
+                await clickAt(tabId, opt.pt);
+                await sleep(400);
+              }
+              const fins = (await execAll(tabId, quoteFinish, [prep.qcount || 0])).filter(Boolean);
+              quoteApplied = fins.some((f) => f && f.ok);
+              if (!quoteApplied) notes.push("인용:박스무반응" + (opt ? " opt:" + opt.id : " 스타일목록없음"));
+            } catch (e) {
+              notes.push("인용:" + (e && e.message ? e.message : e));
+            }
+          } else {
+            notes.push("인용:" + (preps.map((p) => p && p.diag).filter(Boolean).join("/") || "준비실패"));
+          }
+        } else {
+          notes.push("인용:디버거없음");
+        }
         await sendEnter(tabId, attached); // 인용 뒤 여백
       } else {
         const im = images[seg.idx];
@@ -602,13 +677,17 @@ async function fillNaver(tabId, payload) {
     const imgNote = imgTotal
       ? imgOk === imgTotal
         ? `사진 ${imgOk}장 모두 넣었습니다`
-        : `사진 ${imgOk}/${imgTotal}장 (진단: ${notes.slice(0, 4).join(" | ")})`
+        : `사진 ${imgOk}/${imgTotal}장`
       : "";
+    const quoteNotes = notes.filter((n) => n.indexOf("인용") === 0);
+    const quoteNote = quoteNotes.length ? "인용구 박스 일부 실패(문장은 들어감) — " + quoteNotes.slice(0, 2).join(" | ") : "";
+    const hasIssue = (imgTotal > 0 && imgOk < imgTotal) || quoteNotes.length > 0;
+    const diagLine = hasIssue ? "\n진단: " + notes.slice(0, 5).join(" | ") : "";
     await say(
       tabId,
-      `✅ ${titleNote}${imgNote ? "\n🖼️ " + imgNote : ""}\n내용 확인 후 발행해 주세요.`,
-      imgTotal > 0 && imgOk < imgTotal,
-      30000
+      `✅ ${titleNote}${imgNote ? "\n🖼️ " + imgNote : ""}${quoteNote ? "\n💬 " + quoteNote : ""}\n내용 확인 후 발행해 주세요.${diagLine}`,
+      hasIssue,
+      40000
     );
   } catch (e) {
     await say(tabId, "오류: " + (e && e.message ? e.message : e) + "\n" + notes.slice(0, 4).join(" | "), true, 20000);
