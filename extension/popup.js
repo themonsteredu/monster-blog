@@ -46,8 +46,9 @@ let uploadedPhotos = []; // [{ media_type, data(base64) }]
 
 // ---------- 설정 저장/불러오기 ----------
 function loadSettings() {
-  chrome.storage.local.get(["apiKey", "template"], (s) => {
+  chrome.storage.local.get(["apiKey", "openaiKey", "template"], (s) => {
     if (s.apiKey) document.getElementById("apiKey").value = s.apiKey;
+    if (s.openaiKey) document.getElementById("openaiKey").value = s.openaiKey;
     if (s.template) document.getElementById("template").value = s.template;
     // 키가 아직 없으면 설정을 펼쳐서 안내
     if (!s.apiKey) document.getElementById("settings").open = true;
@@ -58,6 +59,7 @@ document.getElementById("saveSettings").addEventListener("click", () => {
   chrome.storage.local.set(
     {
       apiKey: document.getElementById("apiKey").value.trim(),
+      openaiKey: document.getElementById("openaiKey").value.trim(),
       template: document.getElementById("template").value,
     },
     () => setStatus("설정을 저장했습니다.")
@@ -265,6 +267,49 @@ async function makeCardImages(body, title) {
   return out;
 }
 
+// ---------- AI 이미지 생성 (OpenAI — 키가 있을 때) ----------
+// 본문 끝의 "이미지N: 설명" 줄을 읽어 프롬프트로 쓰고, 그 줄들은 본문에서 제거한다.
+function extractImagePrompts(body) {
+  const prompts = {};
+  const kept = [];
+  for (const raw of body.split("\n")) {
+    const m = raw.trim().match(/^이미지\s*(\d+)\s*[::]\s*(.+)$/);
+    if (m) prompts[parseInt(m[1], 10) - 1] = m[2].trim();
+    else kept.push(raw);
+  }
+  return { prompts, body: kept.join("\n") };
+}
+
+async function genOpenAiImage(openaiKey, desc, style) {
+  const styleText =
+    style === "실사"
+      ? "실제 카메라로 찍은 듯한 자연스러운 사진 느낌(photorealistic). 과장 없이 담백하게."
+      : "깔끔하고 따뜻한 플랫 일러스트 스타일. 부드러운 색감.";
+  const prompt =
+    `학원 블로그에 넣을 이미지. ${desc}. ${styleText} ` +
+    "사람 얼굴이 알아볼 수 있게 나오면 안 됨(뒷모습·손·소품 위주). 글자 없이.";
+  const res = await fetch("https://api.openai.com/v1/images/generations", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer " + openaiKey,
+    },
+    body: JSON.stringify({ model: "gpt-image-1", prompt, size: "1536x1024", n: 1 }),
+  });
+  if (!res.ok) {
+    let msg = "HTTP " + res.status;
+    try {
+      const j = await res.json();
+      if (j.error && j.error.message) msg = j.error.message;
+    } catch (_) {}
+    throw new Error(msg);
+  }
+  const data = await res.json();
+  const b64 = data.data && data.data[0] && data.data[0].b64_json;
+  if (!b64) throw new Error("이미지 응답이 비어 있음");
+  return { media_type: "image/png", data: b64 };
+}
+
 // ---------- 네이버에 입력 (백그라운드에 위임 — 팝업이 닫혀도 끝까지 진행) ----------
 document.getElementById("sendNaver").addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -272,17 +317,45 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
     setStatus("네이버 블로그 글쓰기 화면을 먼저 연 뒤 눌러주세요.", true);
     return;
   }
+  // "이미지N: 설명" 줄은 프롬프트로만 쓰고 본문에서는 뺀다
+  const ex = extractImagePrompts(document.getElementById("outBody").value);
   const payload = {
     title: document.getElementById("outTitle").value,
-    body: document.getElementById("outBody").value,
+    body: ex.body,
     images: uploadedPhotos.map((p) => ({ media_type: p.media_type, data: p.data })),
   };
-  // 사진을 안 올렸으면 [이미지N] 자리마다 카드 이미지를 자동 생성
+  // 사진을 안 올렸으면: OpenAI 키가 있으면 AI 이미지 생성, 없으면 카드 이미지
   if (payload.images.length === 0 && /\[이미지\s*\d+\]/.test(payload.body)) {
-    setStatus("사진이 없어 카드 이미지를 만드는 중…");
-    try {
-      payload.images = await makeCardImages(payload.body, payload.title);
-    } catch (_) {}
+    const openaiKey = document.getElementById("openaiKey").value.trim();
+    const style = document.getElementById("style").value;
+    const markers = [...payload.body.matchAll(/^\[이미지\s*(\d+)\]\s*$/gm)].map((m) => parseInt(m[1], 10) - 1);
+    if (openaiKey) {
+      const imgs = [];
+      let failMsg = "";
+      for (let i = 0; i < markers.length; i++) {
+        const idx = markers[i];
+        setStatus(`AI 이미지 생성 중… (${i + 1}/${markers.length}) 장당 10~30초 걸려요.`);
+        try {
+          imgs[idx] = await genOpenAiImage(openaiKey, ex.prompts[idx] || payload.title, style);
+        } catch (e) {
+          failMsg = e && e.message ? e.message : String(e);
+          break;
+        }
+      }
+      if (failMsg) {
+        setStatus("AI 이미지 실패(" + failMsg + ") → 카드 이미지로 대신 넣습니다.", true);
+        try {
+          payload.images = await makeCardImages(payload.body, payload.title);
+        } catch (_) {}
+      } else {
+        payload.images = imgs;
+      }
+    } else {
+      setStatus("사진이 없어 카드 이미지를 만드는 중… (설정에 OpenAI 키를 넣으면 AI 실사/일러스트 생성)");
+      try {
+        payload.images = await makeCardImages(payload.body, payload.title);
+      } catch (_) {}
+    }
   }
   // 제목은 미리 클립보드에도 복사 (만일의 붙여넣기용)
   try {

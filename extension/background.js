@@ -142,8 +142,10 @@ function focusBodyEnd() {
   return true;
 }
 
-// 본문 프레임에서만 동작: 줄들을 한 글자씩 입력 (실시간 써지는 효과). 빈 줄("")은 줄바꿈만.
-async function typeLines(lines) {
+// 본문 프레임에서만 동작: 한 줄을 한 글자씩 입력.
+// 줄바꿈은 여기서 하지 않는다 — 네이버가 스크립트 줄바꿈을 무시해 문단이 붙어버리므로,
+// 배경에서 '진짜 Enter 키'(sendEnter)를 따로 보낸다.
+async function typeOneLine(line) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const sel =
     'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
@@ -157,15 +159,47 @@ async function typeLines(lines) {
   const s = window.getSelection();
   s.removeAllRanges();
   s.addRange(r);
-  for (const line of lines) {
-    for (const ch of line) {
-      document.execCommand("insertText", false, ch);
-      await sleep(8);
-    }
-    document.execCommand("insertParagraph", false, null);
-    await sleep(40);
+  for (const ch of line) {
+    document.execCommand("insertText", false, ch);
+    await sleep(8);
   }
   return true;
+}
+
+// 줄바꿈 예비용 (디버거 없을 때)
+function insertPara() {
+  const sel =
+    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
+  if (document.querySelector(sel)) return false;
+  const bodyEl = document.querySelector('[contenteditable="true"]');
+  if (!bodyEl) return false;
+  bodyEl.focus();
+  document.execCommand("insertParagraph", false, null);
+  return true;
+}
+
+// 제목칸의 화면 좌표 (프레임 안이면 바깥 좌표로 환산) — 진짜 마우스 클릭용
+function titlePoint() {
+  const sel =
+    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
+  const t = document.querySelector(sel);
+  if (!t) return null;
+  const r = t.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  let x = r.left + Math.min(r.width / 2, 200);
+  let y = r.top + r.height / 2;
+  try {
+    let w = window;
+    while (w !== w.top) {
+      const fr = w.frameElement.getBoundingClientRect();
+      x += fr.left;
+      y += fr.top;
+      w = w.parent;
+    }
+  } catch (_) {
+    return null;
+  }
+  return { x: Math.round(x), y: Math.round(y) };
 }
 
 // 본문 프레임의 사진 개수 (삽입 성공 판정용) — 제목 프레임은 0 반환
@@ -179,16 +213,15 @@ function countImages() {
   };
 }
 
-// 본문 프레임에서만 동작: 인용 문장을 입력하고, 그 문단만 정확히 선택해 네이버 인용구(세로줄) 적용.
-// 실패해도 문장은 이미 들어가 있어 글이 망가지지 않는다.
-async function applyQuote(text) {
+// 본문 프레임에서만 동작: 방금 입력한 인용 문단(prefix 포함, 뒤에서부터 탐색)만 선택해
+// 네이버 인용구 버튼을 눌러 세로줄 박스 적용. 실패해도 문장은 남아 글이 망가지지 않는다.
+async function applyQuoteBox(prefix) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const tSel =
     'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
   if (document.querySelector(tSel)) return null;
   const bodyEl = document.querySelector('[contenteditable="true"]');
   if (!bodyEl) return null;
-  const diag = [];
   const toEnd = () => {
     bodyEl.focus();
     const r = document.createRange();
@@ -198,28 +231,23 @@ async function applyQuote(text) {
     s.removeAllRanges();
     s.addRange(r);
   };
-  // 1) 본문 끝에 인용 문장 + 다음 빈 문단
-  toEnd();
-  for (const ch of text) {
-    document.execCommand("insertText", false, ch);
-    await sleep(8);
+  // 1) 인용 문단 찾기 (뒤에서부터)
+  const paras = [...bodyEl.querySelectorAll(".se-text-paragraph, p")];
+  let target = null;
+  for (let i = paras.length - 1; i >= 0; i--) {
+    if ((paras[i].textContent || "").indexOf(prefix) !== -1) {
+      target = paras[i];
+      break;
+    }
   }
-  document.execCommand("insertParagraph", false, null);
-  await sleep(120);
-  // 2) 방금 쓴 인용 문단만 정확히 선택
-  let s = window.getSelection();
-  let node = s.anchorNode;
-  let p = node && (node.nodeType === 1 ? node : node.parentElement);
-  p = p && p.closest(".se-text-paragraph, p");
-  const prev = p && p.previousElementSibling;
-  if (!prev || (prev.textContent || "").indexOf(text.slice(0, 4)) === -1) {
-    return { ok: false, diag: "선택실패" };
-  }
+  if (!target) return { ok: false, diag: "문단못찾음p" + paras.length };
+  // 2) 그 문단만 선택
   const r = document.createRange();
-  r.selectNodeContents(prev);
+  r.selectNodeContents(target);
+  const s = window.getSelection();
   s.removeAllRanges();
   s.addRange(r);
-  await sleep(120);
+  await sleep(150);
   // 3) 인용구 버튼 클릭 (이 프레임 → 바깥 프레임)
   const btnSel =
     '[data-name="quotation"], button[data-log*="quotation"], button[aria-label*="인용"], button[title*="인용"], button[class*="quotation"]';
@@ -265,7 +293,6 @@ async function applyQuote(text) {
   await sleep(300);
   // 5) 커서를 인용 블록 밖(본문 끝)으로
   toEnd();
-  document.execCommand("insertParagraph", false, null);
   return { ok: true, diag: "스타일:" + (picked || "기본") };
 }
 
@@ -305,6 +332,22 @@ function syntheticDrop(b64, type) {
   bodyEl.dispatchEvent(mk("dragover"));
   bodyEl.dispatchEvent(mk("drop"));
   return true;
+}
+
+// 진짜 Enter 키로 줄바꿈 — 스크립트 줄바꿈은 네이버가 무시해 문단이 붙어버림
+async function sendEnter(tabId, attached) {
+  await execAll(tabId, focusBodyEnd);
+  if (attached) {
+    const key = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
+    try {
+      await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", text: "\r", unmodifiedText: "\r", ...key });
+      await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...key });
+      await sleep(60);
+      return;
+    } catch (_) {}
+  }
+  await execAll(tabId, insertPara);
+  await sleep(40);
 }
 
 // ---------- 사진 삽입 ----------
@@ -445,23 +488,38 @@ async function fillNaver(tabId, payload) {
     } catch (_) {}
     await sleep(400);
 
-    // 4) 제목: trusted insertText → 안 되면 기존 방식 → 그래도 안 되면 클립보드 안내
+    // 4) 제목: 진짜 마우스 클릭으로 제목칸 포커스 → trusted insertText → 예비 방식들
     let titleOk = false;
     if (payload.title) {
       await say(tabId, "제목 입력 중…");
-      const focusedArr = await execAll(tabId, focusTitle, [], notes, "titleFocus");
-      const focused = focusedArr.some(Boolean);
-      if (focused && attached) {
+      if (attached) {
         try {
-          await cdp(tabId, "Input.insertText", { text: payload.title });
-          await sleep(300);
-          titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
+          const pt = (await execAll(tabId, titlePoint)).filter(Boolean)[0];
+          if (pt) {
+            await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: pt.x, y: pt.y, button: "left", clickCount: 1 });
+            await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: pt.x, y: pt.y, button: "left", clickCount: 1 });
+            await sleep(300);
+            await cdp(tabId, "Input.insertText", { text: payload.title });
+            await sleep(300);
+            titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
+            if (!titleOk) notes.push("title:클릭입력 무반응(" + pt.x + "," + pt.y + ")");
+          } else notes.push("title:좌표없음");
         } catch (e) {
           notes.push("title:" + (e && e.message ? e.message : e));
         }
       }
-      if (!titleOk && focused) {
-        titleOk = (await execAll(tabId, typeTitleFallback, [payload.title])).some(Boolean);
+      if (!titleOk) {
+        const focused = (await execAll(tabId, focusTitle, [], notes, "titleFocus")).some(Boolean);
+        if (focused && attached) {
+          try {
+            await cdp(tabId, "Input.insertText", { text: payload.title });
+            await sleep(300);
+            titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
+          } catch (_) {}
+        }
+        if (!titleOk && focused) {
+          titleOk = (await execAll(tabId, typeTitleFallback, [payload.title])).some(Boolean);
+        }
       }
     }
 
@@ -482,6 +540,8 @@ async function fillNaver(tabId, payload) {
           segs.push({ t: "quote", text: m[1] });
         } else if (line !== "") {
           buf.push(line);
+        } else if (buf.length && buf[buf.length - 1] !== "") {
+          buf.push(""); // 문단 사이 빈 줄 유지 (한 번만)
         }
       }
       if (buf.length) segs.push({ t: "text", lines: buf });
@@ -493,20 +553,30 @@ async function fillNaver(tabId, payload) {
     for (const seg of segs) {
       if (seg.t === "text") {
         await say(tabId, "본문 입력 중… (실시간으로 써집니다)");
-        const typed = (await execAll(tabId, typeLines, [seg.lines], notes, "type")).some(Boolean);
-        if (typed) bodyTyped = true;
-        else notes.push("type:무반응");
-        // 첫 문단부터 아예 안 써지면 바로 원인 표시하고 중단
-        if (!bodyTyped) {
-          await say(tabId, "본문이 안 써졌어요. 화면을 새로고침(F5)한 뒤 다시 시도해 주세요.\n진단: " + scan + "\n" + notes.slice(0, 5).join(" | "), true, 30000);
-          return;
+        for (const line of seg.lines) {
+          if (line === "") {
+            await sendEnter(tabId, attached);
+            continue;
+          }
+          const typed = (await execAll(tabId, typeOneLine, [line], notes, "type")).some(Boolean);
+          if (typed) bodyTyped = true;
+          await sendEnter(tabId, attached);
+          // 첫 줄부터 아예 안 써지면 바로 원인 표시하고 중단
+          if (!bodyTyped) {
+            await say(tabId, "본문이 안 써졌어요. 화면을 새로고침(F5)한 뒤 다시 시도해 주세요.\n진단: " + scan + "\n" + notes.slice(0, 5).join(" | "), true, 30000);
+            return;
+          }
         }
       } else if (seg.t === "quote") {
         await say(tabId, "인용구 넣는 중…");
-        const rs = (await execAll(tabId, applyQuote, [seg.text], notes, "quote")).filter(Boolean);
+        await sendEnter(tabId, attached); // 인용 앞 여백
+        const typed = (await execAll(tabId, typeOneLine, [seg.text], notes, "quote")).some(Boolean);
+        if (typed) bodyTyped = true;
+        await sendEnter(tabId, attached); // 인용 문단 뒤 빈 문단 (박스 밖 탈출용)
+        const rs = (await execAll(tabId, applyQuoteBox, [seg.text.slice(0, 6)], notes, "quoteBox")).filter(Boolean);
         const q = rs.find((x) => x && x.ok);
-        if (q) bodyTyped = true;
-        else notes.push("인용:" + (rs.map((x) => x && x.diag).filter(Boolean).join("/") || "무반응"));
+        if (!q) notes.push("인용:" + (rs.map((x) => x && x.diag).filter(Boolean).join("/") || "무반응"));
+        await sendEnter(tabId, attached); // 인용 뒤 여백
       } else {
         const im = images[seg.idx];
         if (!im) continue;
