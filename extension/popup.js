@@ -190,6 +190,81 @@ document.getElementById("copyBtn").addEventListener("click", () => {
   navigator.clipboard.writeText(body).then(() => setStatus("본문을 복사했습니다."));
 });
 
+// ---------- 카드 이미지 자동 생성 (사진을 안 올렸을 때 [이미지N] 자리용) ----------
+// 인용구/제목 문장을 넣은 깔끔한 카드 그림을 만든다. API·비용 없이 항상 동작.
+function drawCard(text, pal) {
+  const c1 = pal[0], c2 = pal[1], tc = pal[2];
+  const W = 1000, H = 640;
+  const cv = document.createElement("canvas");
+  cv.width = W;
+  cv.height = H;
+  const ctx = cv.getContext("2d");
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, c1);
+  g.addColorStop(1, c2);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  // 글자 줄바꿈 (한글은 아무 데서나 줄바꿈 가능 — 글자 단위)
+  ctx.font = "bold 46px 'Malgun Gothic', sans-serif";
+  const maxW = W - 280;
+  const lines = [];
+  let cur = "";
+  for (const ch of text) {
+    if (ctx.measureText(cur + ch).width > maxW && cur) {
+      lines.push(cur.trim());
+      cur = ch === " " ? "" : ch;
+    } else cur += ch;
+  }
+  if (cur.trim()) lines.push(cur.trim());
+  const shown = lines.slice(0, 4);
+  const lh = 68;
+  const blockH = shown.length * lh;
+  const y0 = (H - blockH) / 2;
+  // 왼쪽 세로 포인트 바
+  ctx.fillStyle = tc;
+  ctx.fillRect(100, y0 - 14, 7, blockH + 18);
+  // 본문
+  ctx.textBaseline = "top";
+  shown.forEach((l, i) => ctx.fillText(l, 136, y0 + i * lh));
+  // 아래 학원명
+  ctx.font = "22px 'Malgun Gothic', sans-serif";
+  ctx.globalAlpha = 0.75;
+  ctx.fillText("더몬스터학원 · 광주 동구 계림동", 100, H - 72);
+  ctx.globalAlpha = 1;
+  return new Promise((resolve) => {
+    cv.toBlob((b) => {
+      const r = new FileReader();
+      r.onload = () => resolve({ media_type: "image/png", data: r.result.split(",")[1] });
+      r.readAsDataURL(b);
+    }, "image/png");
+  });
+}
+
+async function makeCardImages(body, title) {
+  const imgRe = /^\[이미지\s*(\d+)\]\s*$/;
+  const quoteRe = /^\[인용\]\s*(.*)$/;
+  const texts = []; // 이미지 번호(0부터) → 카드에 넣을 문장
+  let lastQuote = "";
+  for (const raw of body.split("\n")) {
+    const line = raw.trim();
+    let m;
+    if ((m = line.match(quoteRe))) lastQuote = m[1];
+    else if ((m = line.match(imgRe))) texts[parseInt(m[1], 10) - 1] = lastQuote || title;
+  }
+  const palettes = [
+    ["#eef7f0", "#cfe8d6", "#245c37"],
+    ["#eef3fb", "#d3e3f6", "#1f4e79"],
+    ["#fdf3ec", "#f5ddc7", "#8a4b2d"],
+    ["#f3f0fb", "#dfd6f2", "#4a3d7a"],
+  ];
+  const out = [];
+  for (let i = 0; i < texts.length; i++) {
+    if (texts[i] == null) continue;
+    out[i] = await drawCard(texts[i], palettes[i % palettes.length]);
+  }
+  return out;
+}
+
 // ---------- 네이버에 입력 (백그라운드에 위임 — 팝업이 닫혀도 끝까지 진행) ----------
 document.getElementById("sendNaver").addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -202,6 +277,13 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
     body: document.getElementById("outBody").value,
     images: uploadedPhotos.map((p) => ({ media_type: p.media_type, data: p.data })),
   };
+  // 사진을 안 올렸으면 [이미지N] 자리마다 카드 이미지를 자동 생성
+  if (payload.images.length === 0 && /\[이미지\s*\d+\]/.test(payload.body)) {
+    setStatus("사진이 없어 카드 이미지를 만드는 중…");
+    try {
+      payload.images = await makeCardImages(payload.body, payload.title);
+    } catch (_) {}
+  }
   // 제목은 미리 클립보드에도 복사 (만일의 붙여넣기용)
   try {
     await navigator.clipboard.writeText(payload.title);

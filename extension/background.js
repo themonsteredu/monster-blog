@@ -179,6 +179,96 @@ function countImages() {
   };
 }
 
+// 본문 프레임에서만 동작: 인용 문장을 입력하고, 그 문단만 정확히 선택해 네이버 인용구(세로줄) 적용.
+// 실패해도 문장은 이미 들어가 있어 글이 망가지지 않는다.
+async function applyQuote(text) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const tSel =
+    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
+  if (document.querySelector(tSel)) return null;
+  const bodyEl = document.querySelector('[contenteditable="true"]');
+  if (!bodyEl) return null;
+  const diag = [];
+  const toEnd = () => {
+    bodyEl.focus();
+    const r = document.createRange();
+    r.selectNodeContents(bodyEl);
+    r.collapse(false);
+    const s = window.getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+  };
+  // 1) 본문 끝에 인용 문장 + 다음 빈 문단
+  toEnd();
+  for (const ch of text) {
+    document.execCommand("insertText", false, ch);
+    await sleep(8);
+  }
+  document.execCommand("insertParagraph", false, null);
+  await sleep(120);
+  // 2) 방금 쓴 인용 문단만 정확히 선택
+  let s = window.getSelection();
+  let node = s.anchorNode;
+  let p = node && (node.nodeType === 1 ? node : node.parentElement);
+  p = p && p.closest(".se-text-paragraph, p");
+  const prev = p && p.previousElementSibling;
+  if (!prev || (prev.textContent || "").indexOf(text.slice(0, 4)) === -1) {
+    return { ok: false, diag: "선택실패" };
+  }
+  const r = document.createRange();
+  r.selectNodeContents(prev);
+  s.removeAllRanges();
+  s.addRange(r);
+  await sleep(120);
+  // 3) 인용구 버튼 클릭 (이 프레임 → 바깥 프레임)
+  const btnSel =
+    '[data-name="quotation"], button[data-log*="quotation"], button[aria-label*="인용"], button[title*="인용"], button[class*="quotation"]';
+  let btn = document.querySelector(btnSel);
+  let doc = document;
+  if (!btn) {
+    try {
+      btn = window.top.document.querySelector(btnSel);
+      doc = window.top.document;
+    } catch (_) {}
+  }
+  if (!btn) return { ok: false, diag: "버튼없음" };
+  btn.click();
+  await sleep(400);
+  // 4) 스타일 목록이 떴으면 '세로줄(line)' 스타일 선택
+  let picked = "";
+  for (const d of [doc, document]) {
+    const opts = [...d.querySelectorAll('button, [role="button"], li')].filter((x) => {
+      if (x === btn) return false;
+      const idv =
+        (typeof x.className === "string" ? x.className : "") +
+        (x.getAttribute("data-value") || "") +
+        (x.getAttribute("data-name") || "") +
+        (x.getAttribute("data-log") || "");
+      return /quotation/i.test(idv);
+    });
+    let o = opts.find((x) => {
+      const idv =
+        (typeof x.className === "string" ? x.className : "") +
+        (x.getAttribute("data-value") || "") +
+        (x.getAttribute("data-name") || "") +
+        (x.getAttribute("data-log") || "");
+      return /line|vertical/i.test(idv);
+    });
+    if (!o && opts.length) o = opts[Math.min(1, opts.length - 1)];
+    if (o) {
+      o.click();
+      picked =
+        (o.getAttribute("data-value") || o.getAttribute("data-name") || (typeof o.className === "string" ? o.className : "")).slice(0, 24);
+      break;
+    }
+  }
+  await sleep(300);
+  // 5) 커서를 인용 블록 밖(본문 끝)으로
+  toEnd();
+  document.execCommand("insertParagraph", false, null);
+  return { ok: true, diag: "스타일:" + (picked || "기본") };
+}
+
 // 예비 1: 가짜 paste 이벤트 (에디터가 스크립트 paste 를 받아줄 경우)
 function syntheticPaste(b64, type) {
   const sel =
@@ -388,7 +478,8 @@ async function fillNaver(tabId, payload) {
           if (buf.length) { segs.push({ t: "text", lines: buf }); buf = []; }
           segs.push({ t: "img", idx: parseInt(m[1], 10) - 1 });
         } else if ((m = line.match(quoteRe))) {
-          buf.push("", m[1], "");
+          if (buf.length) { segs.push({ t: "text", lines: buf }); buf = []; }
+          segs.push({ t: "quote", text: m[1] });
         } else if (line !== "") {
           buf.push(line);
         }
@@ -410,6 +501,12 @@ async function fillNaver(tabId, payload) {
           await say(tabId, "본문이 안 써졌어요. 화면을 새로고침(F5)한 뒤 다시 시도해 주세요.\n진단: " + scan + "\n" + notes.slice(0, 5).join(" | "), true, 30000);
           return;
         }
+      } else if (seg.t === "quote") {
+        await say(tabId, "인용구 넣는 중…");
+        const rs = (await execAll(tabId, applyQuote, [seg.text], notes, "quote")).filter(Boolean);
+        const q = rs.find((x) => x && x.ok);
+        if (q) bodyTyped = true;
+        else notes.push("인용:" + (rs.map((x) => x && x.diag).filter(Boolean).join("/") || "무반응"));
       } else {
         const im = images[seg.idx];
         if (!im) continue;
