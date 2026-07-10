@@ -181,10 +181,16 @@ function insertPara() {
 // 제목칸의 화면 좌표 (프레임 안이면 바깥 좌표로 환산) — 진짜 마우스 클릭용
 function titlePoint() {
   const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  const t = document.querySelector(sel);
+    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"], [class*="documentTitle"] [contenteditable="true"], .se-title-text [contenteditable="true"]';
+  let t = document.querySelector(sel);
   if (!t) return null;
-  const r = t.getBoundingClientRect();
+  try { t.scrollIntoView({ block: "center" }); } catch (_) {}
+  let r = t.getBoundingClientRect();
+  // 크기가 0이면 부모(제목 컨테이너) 좌표로 대체
+  if (!r.width || !r.height) {
+    const cont = t.closest('[class*="documentTitle"], .se-title, .se-section-documentTitle') || t.parentElement;
+    if (cont) r = cont.getBoundingClientRect();
+  }
   if (!r.width || !r.height) return null;
   let x = r.left + Math.min(r.width / 2, 200);
   let y = r.top + r.height / 2;
@@ -213,31 +219,33 @@ function countImages() {
   };
 }
 
-// 인용구 처리 1단계 (본문 프레임에서만): 방금 쓴 인용 문단을 선택하고,
+// 인용구 처리 1단계 (본문 프레임에서만): 방금 '막 타이핑한' 인용 줄을 커서 기준으로 선택하고,
 // 인용구 툴바 버튼의 화면 좌표(맨 바깥 기준)를 계산해 돌려준다.
+// ※ DOM 문단 구조(.se-text-paragraph)에 의존하지 않는다 — 네이버 구조가 달라도 동작하도록
+//   브라우저 Selection.modify 로 "커서에서 줄 앞까지"를 선택한다.
 // 버튼 클릭은 배경에서 '진짜 마우스 클릭'(CDP)으로 한다 — 가짜 click()은 네이버가 무시함.
-function prepQuote(prefix) {
+function prepQuote() {
   const tSel =
     'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
   if (document.querySelector(tSel)) return null;
   const bodyEl = document.querySelector('[contenteditable="true"]');
   if (!bodyEl) return null;
-  // 1) 인용 문단 찾기 (뒤에서부터) + 선택
-  const paras = [...bodyEl.querySelectorAll(".se-text-paragraph, p")];
-  let target = null;
-  for (let i = paras.length - 1; i >= 0; i--) {
-    if ((paras[i].textContent || "").indexOf(prefix) !== -1) {
-      target = paras[i];
-      break;
-    }
-  }
-  if (!target) return { diag: "문단못찾음p" + paras.length };
-  const r = document.createRange();
-  r.selectNodeContents(target);
   const s = window.getSelection();
-  s.removeAllRanges();
-  s.addRange(r);
-  // 2) 인용구 버튼 좌표 (이 프레임 → 바깥 프레임)
+  // 커서가 이 본문 안에 있어야 함 (방금 인용 줄을 타이핑한 프레임만 통과)
+  if (!s || s.rangeCount === 0) return { diag: "커서없음" };
+  let node = s.anchorNode;
+  if (!(node && bodyEl.contains(node))) return { diag: "커서밖" };
+  bodyEl.focus();
+  // 커서(줄 끝)에서 줄 맨 앞까지 선택
+  try {
+    s.collapseToEnd();
+    s.modify("extend", "backward", "lineboundary");
+  } catch (_) {
+    return { diag: "선택불가" };
+  }
+  const selLen = s.toString().length;
+  if (selLen === 0) return { diag: "선택0" };
+  // 인용구 버튼 좌표 (이 프레임 → 바깥 프레임)
   const toTop = (el, win) => {
     const rr = el.getBoundingClientRect();
     if (!rr.width || !rr.height) return null;
@@ -257,7 +265,7 @@ function prepQuote(prefix) {
     return { x: Math.round(x), y: Math.round(y) };
   };
   const btnSel =
-    '[data-name="quotation"], button[data-log*="quotation"], button[aria-label*="인용"], button[title*="인용"], button[class*="quotation"]';
+    '[data-name="quotation"], button[data-log*="quotation"], button[aria-label*="인용"], button[title*="인용"], [class*="quotation"] button, button[class*="quotation"]';
   let btn = document.querySelector(btnSel);
   let win = window;
   if (!btn) {
@@ -266,11 +274,11 @@ function prepQuote(prefix) {
       win = window.top;
     } catch (_) {}
   }
-  if (!btn) return { diag: "버튼없음" };
+  if (!btn) return { diag: "버튼없음sel" + selLen };
   const pt = toTop(btn, win);
   if (!pt) return { diag: "버튼좌표없음" };
-  const qcount = document.querySelectorAll(".se-quotation, .se-component-quotation, blockquote").length;
-  return { btn: pt, qcount, diag: "" };
+  const qcount = document.querySelectorAll(".se-quotation, .se-component-quotation, blockquote, [class*='quotation']").length;
+  return { btn: pt, qcount, sel: selLen, diag: "" };
 }
 
 // 인용구 처리 2단계: 버튼 클릭 후 열린 스타일 목록에서 '세로줄(line)' 항목의 좌표를 찾는다
@@ -622,26 +630,27 @@ async function fillNaver(tabId, payload) {
       } else if (seg.t === "quote") {
         await say(tabId, "인용구 넣는 중…");
         await sendEnter(tabId, attached); // 인용 앞 여백
+        // 인용 줄을 타이핑 (커서는 줄 끝에 남는다 — 아직 Enter 치지 않음)
         const typed = (await execAll(tabId, typeOneLine, [seg.text], notes, "quote")).some(Boolean);
         if (typed) bodyTyped = true;
-        await sendEnter(tabId, attached); // 인용 문단 뒤 빈 문단 (박스 밖 탈출용)
-        // 인용 문단 선택 + 인용구 버튼 좌표 → 진짜 마우스 클릭으로 박스 적용
+        await sleep(120);
+        // 방금 친 줄을 선택 + 인용구 버튼 좌표 → 진짜 마우스 클릭으로 박스 적용
         let quoteApplied = false;
         if (attached) {
-          const preps = (await execAll(tabId, prepQuote, [seg.text.slice(0, 6)], notes, "quotePrep")).filter(Boolean);
+          const preps = (await execAll(tabId, prepQuote, [], notes, "quotePrep")).filter(Boolean);
           const prep = preps.find((p) => p && p.btn);
           if (prep) {
             try {
               await clickAt(tabId, prep.btn);
-              await sleep(500);
+              await sleep(600);
               const opt = (await execAll(tabId, quoteStyleOption)).filter(Boolean)[0];
               if (opt && opt.pt) {
                 await clickAt(tabId, opt.pt);
-                await sleep(400);
+                await sleep(500);
               }
               const fins = (await execAll(tabId, quoteFinish, [prep.qcount || 0])).filter(Boolean);
               quoteApplied = fins.some((f) => f && f.ok);
-              if (!quoteApplied) notes.push("인용:박스무반응" + (opt ? " opt:" + opt.id : " 스타일목록없음"));
+              if (!quoteApplied) notes.push("인용:박스무반응" + (opt ? " opt:" + opt.id : " 스타일없음"));
             } catch (e) {
               notes.push("인용:" + (e && e.message ? e.message : e));
             }
@@ -651,7 +660,9 @@ async function fillNaver(tabId, payload) {
         } else {
           notes.push("인용:디버거없음");
         }
-        await sendEnter(tabId, attached); // 인용 뒤 여백
+        // 인용 블록 밖으로 나가 다음 문단을 위한 줄바꿈
+        await execAll(tabId, focusBodyEnd);
+        await sendEnter(tabId, attached);
       } else {
         const im = images[seg.idx];
         if (!im) continue;
