@@ -1,10 +1,13 @@
-// background.js — 백그라운드 오케스트레이터 (v1.3.0 핵심)
+// background.js — 백그라운드 오케스트레이터 (v1.3.x)
 //
 // 왜 이 파일이 필요한가:
 // 지금까지 사진 자동삽입이 안 된 근본 원인은, 자바스크립트로 만든 가짜 이벤트(드래그/파일선택)를
 // 브라우저가 isTrusted=false 로 표시해 네이버 에디터가 무시하기 때문이다.
 // 그래서 chrome.debugger(CDP)로 "진짜 사용자 입력과 완전히 동일한(trusted)" Ctrl+V 를 만들어
 // 클립보드에 올린 사진을 실제 붙여넣기 경로로 통과시킨다.
+//
+// v1.3.1: 본문 입력을 "모든 프레임에 뿌리고 각 프레임이 스스로 판단"하는 검증된 방식으로 복구.
+// (특정 프레임 하나를 골라 넣는 방식은 보이지 않는 엉뚱한 프레임을 고를 수 있었음)
 // 팝업이 닫혀도 여기(서비스워커)서 끝까지 진행하고, 진행 상황은 글쓰기 화면 위 초록 상자로 보여준다.
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -17,38 +20,45 @@ function cdp(tabId, method, params) {
   return chrome.debugger.sendCommand({ tabId }, method, params || {});
 }
 
-// 특정 프레임에서 함수 실행, 첫 결과 반환
-async function exec1(tabId, frameId, func, args) {
+// 모든 프레임에서 실행 — 각 함수가 스스로 "내 프레임이 맞는지" 판단한다 (검증된 방식)
+async function execAll(tabId, func, args, notes, tag) {
   try {
     const res = await chrome.scripting.executeScript({
-      target: frameId == null ? { tabId } : { tabId, frameIds: [frameId] },
+      target: { tabId, allFrames: true },
       func,
       args: args || [],
     });
-    return res && res[0] ? res[0].result : null;
-  } catch (_) {
-    return null;
+    return (res || []).map((r) => (r ? r.result : null));
+  } catch (e) {
+    if (notes) notes.push((tag || "exec") + ":" + (e && e.message ? e.message : e));
+    return [];
   }
 }
 
-// 글쓰기 화면 오른쪽 위에 진행 상황 상자 표시
+// 글쓰기 화면 오른쪽 위에 진행 상황 상자 표시 (맨 바깥 프레임에만)
 async function say(tabId, text, isError, hideAfter) {
-  await exec1(tabId, null, (t, e, h) => {
-    let el = document.getElementById("__mb_overlay");
-    if (!el) {
-      el = document.createElement("div");
-      el.id = "__mb_overlay";
-      el.style.cssText =
-        "position:fixed;top:12px;right:12px;z-index:2147483647;color:#fff;padding:10px 14px;" +
-        "border-radius:10px;font-size:13px;font-family:sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.25);" +
-        "white-space:pre-line;max-width:340px;line-height:1.5;";
-      document.documentElement.appendChild(el);
-    }
-    el.style.background = e ? "#d33" : "#03c75a";
-    el.textContent = t;
-    if (el.__t) clearTimeout(el.__t);
-    if (h) el.__t = setTimeout(() => el.remove(), h);
-  }, [text, !!isError, hideAfter || 0]);
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (t, e, h) => {
+        let el = document.getElementById("__mb_overlay");
+        if (!el) {
+          el = document.createElement("div");
+          el.id = "__mb_overlay";
+          el.style.cssText =
+            "position:fixed;top:12px;right:12px;z-index:2147483647;color:#fff;padding:10px 14px;" +
+            "border-radius:10px;font-size:13px;font-family:sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.25);" +
+            "white-space:pre-line;max-width:340px;line-height:1.5;";
+          document.documentElement.appendChild(el);
+        }
+        el.style.background = e ? "#d33" : "#03c75a";
+        el.textContent = t;
+        if (el.__t) clearTimeout(el.__t);
+        if (h) el.__t = setTimeout(() => el.remove(), h);
+      },
+      args: [text, !!isError, hideAfter || 0],
+    });
+  } catch (_) {}
 }
 
 // ---------- 페이지 안에서 실행되는 함수들 (외부 변수 참조 금지 — 각자 selector 를 갖고 있음) ----------
@@ -58,7 +68,7 @@ function scanFrame() {
     'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
   const eds = document.querySelectorAll('[contenteditable="true"]').length;
   const titleEl = document.querySelector(sel);
-  return { hasTitle: !!titleEl, hasBody: !titleEl && eds > 0, eds };
+  return { hasTitle: !!titleEl, hasBody: !titleEl && eds > 0, eds, top: window === window.top };
 }
 
 function focusTitle() {
@@ -115,11 +125,11 @@ function typeTitleFallback(title) {
   return v.indexOf(title.slice(0, 5)) !== -1;
 }
 
-// 본문 프레임에서: 커서를 본문 끝으로
+// 본문 프레임에서만 동작: 커서를 본문 끝으로 (제목 프레임이면 스스로 건너뜀)
 function focusBodyEnd() {
   const sel =
     'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  if (document.querySelector(sel)) return false; // 제목 프레임이면 건드리지 않음
+  if (document.querySelector(sel)) return false;
   const bodyEl = document.querySelector('[contenteditable="true"]');
   if (!bodyEl) return false;
   bodyEl.focus();
@@ -132,7 +142,7 @@ function focusBodyEnd() {
   return true;
 }
 
-// 본문 프레임에서: 줄들을 한 글자씩 입력 (실시간 써지는 효과). 빈 줄("")은 줄바꿈만.
+// 본문 프레임에서만 동작: 줄들을 한 글자씩 입력 (실시간 써지는 효과). 빈 줄("")은 줄바꿈만.
 async function typeLines(lines) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const sel =
@@ -158,8 +168,11 @@ async function typeLines(lines) {
   return true;
 }
 
-// 본문 프레임의 사진 개수 (삽입 성공 판정용)
+// 본문 프레임의 사진 개수 (삽입 성공 판정용) — 제목 프레임은 0 반환
 function countImages() {
+  const sel =
+    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
+  if (document.querySelector(sel)) return { res: 0, img: 0 };
   return {
     res: document.querySelectorAll(".se-image-resource").length,
     img: document.querySelectorAll("img").length,
@@ -224,12 +237,20 @@ function clipExpr(im) {
   );
 }
 
-async function waitMoreImages(tabId, frameId, before, timeoutMs) {
+// 모든 프레임의 사진 개수 합계
+async function totalImages(tabId) {
+  const counts = await execAll(tabId, countImages);
+  return counts
+    .filter(Boolean)
+    .reduce((a, c) => ({ res: a.res + (c.res || 0), img: a.img + (c.img || 0) }), { res: 0, img: 0 });
+}
+
+async function waitMoreImages(tabId, before, timeoutMs) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     await sleep(500);
-    const now = await exec1(tabId, frameId, countImages);
-    if (now && before && (now.res > before.res || now.img > before.img)) {
+    const now = await totalImages(tabId);
+    if (now.res > before.res || now.img > before.img) {
       await sleep(1200); // 업로드 마무리 여유
       return true;
     }
@@ -237,8 +258,8 @@ async function waitMoreImages(tabId, frameId, before, timeoutMs) {
   return false;
 }
 
-async function insertImage(tabId, frameId, im, attached, notes) {
-  const before = (await exec1(tabId, frameId, countImages)) || { res: 0, img: 0 };
+async function insertImage(tabId, im, attached, notes) {
+  const before = await totalImages(tabId);
 
   // A) 진짜 붙여넣기: 클립보드에 사진을 올리고, 디버거로 trusted Ctrl+V
   if (attached) {
@@ -251,7 +272,7 @@ async function insertImage(tabId, frameId, im, attached, notes) {
       });
       const wv = w && w.result ? w.result.value : null;
       if (wv === "ok") {
-        await exec1(tabId, frameId, focusBodyEnd);
+        await execAll(tabId, focusBodyEnd);
         await sleep(200);
         const key = {
           modifiers: 2, // Ctrl
@@ -262,7 +283,7 @@ async function insertImage(tabId, frameId, im, attached, notes) {
         };
         await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", commands: ["Paste"], ...key });
         await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...key });
-        if (await waitMoreImages(tabId, frameId, before, 12000)) return "A";
+        if (await waitMoreImages(tabId, before, 12000)) return "A";
         notes.push("A:붙여넣기 무반응");
       } else {
         notes.push("A:" + (wv || "클립보드 실패"));
@@ -276,15 +297,15 @@ async function insertImage(tabId, frameId, im, attached, notes) {
 
   // B) 예비: 가짜 paste 이벤트
   try {
-    await exec1(tabId, frameId, syntheticPaste, [im.data, im.media_type]);
-    if (await waitMoreImages(tabId, frameId, before, 5000)) return "B";
+    await execAll(tabId, syntheticPaste, [im.data, im.media_type], notes, "B");
+    if (await waitMoreImages(tabId, before, 5000)) return "B";
     notes.push("B:무반응");
   } catch (_) {}
 
   // C) 예비: 가짜 드래그&드롭
   try {
-    await exec1(tabId, frameId, syntheticDrop, [im.data, im.media_type]);
-    if (await waitMoreImages(tabId, frameId, before, 5000)) return "C";
+    await execAll(tabId, syntheticDrop, [im.data, im.media_type], notes, "C");
+    if (await waitMoreImages(tabId, before, 5000)) return "C";
     notes.push("C:무반응");
   } catch (_) {}
 
@@ -299,16 +320,19 @@ async function fillNaver(tabId, payload) {
   try {
     await say(tabId, "글 입력을 시작합니다…");
 
-    // 1) 프레임 파악: 제목 프레임(바깥) / 본문 프레임(안쪽 iframe)
+    // 1) 프레임 상황 파악 (진단용) — 본문칸이 어딘가에 있는지 확인
     const frames = await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       func: scanFrame,
     });
+    const scan = frames
+      .map((f) => f && f.result && `f${f.frameId}${f.result.top ? "T" : ""}:제${+f.result.hasTitle} 본${+f.result.hasBody} 편${f.result.eds}`)
+      .filter(Boolean)
+      .join(" | ");
+    const hasBodyAnywhere = frames.some((f) => f.result && f.result.hasBody);
     const titleFrame = frames.find((f) => f.result && f.result.hasTitle) || null;
-    const bodyFrame =
-      frames.filter((f) => f.result && f.result.hasBody).sort((a, b) => b.result.eds - a.result.eds)[0] || null;
-    if (!bodyFrame) {
-      await say(tabId, "본문칸을 못 찾았어요. 글쓰기 화면을 새로고침(F5)한 뒤 다시 눌러주세요.", true, 10000);
+    if (!hasBodyAnywhere) {
+      await say(tabId, "본문칸을 못 찾았어요. 글쓰기 화면을 새로고침(F5)한 뒤 다시 눌러주세요.\n진단: " + scan, true, 15000);
       return;
     }
 
@@ -335,19 +359,19 @@ async function fillNaver(tabId, payload) {
     let titleOk = false;
     if (payload.title) {
       await say(tabId, "제목 입력 중…");
-      const tf = titleFrame ? titleFrame.frameId : null;
-      const focused = await exec1(tabId, tf, focusTitle);
+      const focusedArr = await execAll(tabId, focusTitle, [], notes, "titleFocus");
+      const focused = focusedArr.some(Boolean);
       if (focused && attached) {
         try {
           await cdp(tabId, "Input.insertText", { text: payload.title });
           await sleep(300);
-          titleOk = !!(await exec1(tabId, tf, checkTitle, [payload.title.slice(0, 5)]));
+          titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
         } catch (e) {
           notes.push("title:" + (e && e.message ? e.message : e));
         }
       }
       if (!titleOk && focused) {
-        titleOk = !!(await exec1(tabId, tf, typeTitleFallback, [payload.title]));
+        titleOk = (await execAll(tabId, typeTitleFallback, [payload.title])).some(Boolean);
       }
     }
 
@@ -372,19 +396,26 @@ async function fillNaver(tabId, payload) {
       if (buf.length) segs.push({ t: "text", lines: buf });
     }
 
-    // 6) 순서대로 입력 (글 → 사진 → 글 …)
+    // 6) 순서대로 입력 (글 → 사진 → 글 …) — 모든 프레임에 뿌리면 본문 프레임만 스스로 반응
     const images = payload.images || [];
-    let imgOk = 0, imgTotal = 0;
+    let imgOk = 0, imgTotal = 0, bodyTyped = false;
     for (const seg of segs) {
       if (seg.t === "text") {
         await say(tabId, "본문 입력 중… (실시간으로 써집니다)");
-        await exec1(tabId, bodyFrame.frameId, typeLines, [seg.lines]);
+        const typed = (await execAll(tabId, typeLines, [seg.lines], notes, "type")).some(Boolean);
+        if (typed) bodyTyped = true;
+        else notes.push("type:무반응");
+        // 첫 문단부터 아예 안 써지면 바로 원인 표시하고 중단
+        if (!bodyTyped) {
+          await say(tabId, "본문이 안 써졌어요. 화면을 새로고침(F5)한 뒤 다시 시도해 주세요.\n진단: " + scan + "\n" + notes.slice(0, 5).join(" | "), true, 30000);
+          return;
+        }
       } else {
         const im = images[seg.idx];
         if (!im) continue;
         imgTotal++;
         await say(tabId, `사진 ${seg.idx + 1} 넣는 중… (클립보드 붙여넣기)`);
-        const how = await insertImage(tabId, bodyFrame.frameId, im, attached, notes);
+        const how = await insertImage(tabId, im, attached, notes);
         if (how) imgOk++;
       }
     }
@@ -404,16 +435,16 @@ async function fillNaver(tabId, payload) {
     const imgNote = imgTotal
       ? imgOk === imgTotal
         ? `사진 ${imgOk}장 모두 넣었습니다`
-        : `사진 ${imgOk}/${imgTotal}장 (실패: ${notes.slice(0, 4).join(" | ")})`
+        : `사진 ${imgOk}/${imgTotal}장 (진단: ${notes.slice(0, 4).join(" | ")})`
       : "";
     await say(
       tabId,
       `✅ ${titleNote}${imgNote ? "\n🖼️ " + imgNote : ""}\n내용 확인 후 발행해 주세요.`,
       imgTotal > 0 && imgOk < imgTotal,
-      20000
+      30000
     );
   } catch (e) {
-    await say(tabId, "오류: " + (e && e.message ? e.message : e) + "\n" + notes.slice(0, 4).join(" | "), true, 15000);
+    await say(tabId, "오류: " + (e && e.message ? e.message : e) + "\n" + notes.slice(0, 4).join(" | "), true, 20000);
   } finally {
     if (attached) {
       try { await chrome.debugger.detach({ tabId }); } catch (_) {}
