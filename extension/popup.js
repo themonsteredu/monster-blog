@@ -94,6 +94,13 @@ function fileToDataURL(file) {
   });
 }
 
+// 발행 방식이 '예약'일 때만 시간 입력칸 보이기
+document.getElementById("pubmode").addEventListener("change", (e) => {
+  const show = e.target.value === "reserve";
+  document.getElementById("pubwhen").style.display = show ? "block" : "none";
+  document.getElementById("pubhint").style.display = show ? "block" : "none";
+});
+
 // ---------- 글 생성 ----------
 document.getElementById("generate").addEventListener("click", async () => {
   const apiKey = document.getElementById("apiKey").value.trim();
@@ -271,6 +278,64 @@ async function makeCardImages(body, title) {
   return out;
 }
 
+// ---------- 하단 연락처 배너 이미지 (글자 나열 대신 예쁜 카드로) ----------
+function drawFooterBanner() {
+  const W = 1000, H = 560;
+  const cv = document.createElement("canvas");
+  cv.width = W;
+  cv.height = H;
+  const ctx = cv.getContext("2d");
+  // 배경 그라데이션 (브랜드 그린)
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, "#0f3d24");
+  g.addColorStop(1, "#1c6b3f");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  // 왼쪽 포인트 바
+  ctx.fillStyle = "#8fe0b0";
+  ctx.fillRect(70, 90, 8, H - 180);
+  ctx.textBaseline = "top";
+  // 학원명
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 62px 'Malgun Gothic', sans-serif";
+  ctx.fillText("더몬스터학원", 108, 96);
+  // 한 줄 소개
+  ctx.font = "26px 'Malgun Gothic', sans-serif";
+  ctx.fillStyle = "#d9f2e3";
+  ctx.fillText("광주 동구 계림동 · 초등3학년~고3 수학·교과 전문", 110, 182);
+  // 구분선
+  ctx.strokeStyle = "rgba(255,255,255,0.25)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(110, 240);
+  ctx.lineTo(W - 80, 240);
+  ctx.stroke();
+  // 연락처 블록
+  const rows = [
+    ["전화", "062-653-1599"],
+    ["문자", "010-7627-1003"],
+    ["카카오톡", "채널 검색: 더몬스터학원"],
+    ["주소", "광주광역시 동구 경양로234 118동상가 716호"],
+  ];
+  let y = 272;
+  for (const [k, v] of rows) {
+    ctx.font = "bold 27px 'Malgun Gothic', sans-serif";
+    ctx.fillStyle = "#8fe0b0";
+    ctx.fillText(k, 110, y);
+    ctx.font = "27px 'Malgun Gothic', sans-serif";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(v, 240, y);
+    y += 62;
+  }
+  return new Promise((resolve) => {
+    cv.toBlob((b) => {
+      const r = new FileReader();
+      r.onload = () => resolve({ media_type: "image/png", data: r.result.split(",")[1] });
+      r.readAsDataURL(b);
+    }, "image/png");
+  });
+}
+
 // ---------- AI 이미지 생성 (OpenAI — 키가 있을 때) ----------
 // 본문 끝의 "이미지N: 설명" 줄을 읽어 프롬프트로 쓰고, 그 줄들은 본문에서 제거한다.
 function extractImagePrompts(body) {
@@ -395,14 +460,27 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
       } catch (_) {}
     }
   }
+  // 하단 연락처 배너 이미지 (글 맨 끝에 예쁘게)
+  try {
+    payload.footer = await drawFooterBanner();
+  } catch (_) {}
+  // 발행 방식
+  const pubmode = document.getElementById("pubmode").value;
+  payload.publish = { mode: pubmode, when: document.getElementById("pubwhen").value || "" };
+  if (pubmode === "reserve" && !payload.publish.when) {
+    setStatus("예약 발행을 고르셨어요. 예약 시간을 먼저 선택해 주세요.", true);
+    return;
+  }
   // 제목은 미리 클립보드에도 복사 (만일의 붙여넣기용)
   try {
     await navigator.clipboard.writeText(payload.title);
   } catch (_) {}
   chrome.runtime.sendMessage({ type: "fillNaver", tabId: tab.id, payload });
+  const pubMsg =
+    pubmode === "now" ? " (입력 후 바로 발행합니다)" : pubmode === "reserve" ? " (입력 후 예약 발행합니다)" : "";
   setStatus(
-    "입력을 시작했습니다! 글쓰기 화면 오른쪽 위 초록 상자로 진행 상황이 보입니다.\n" +
-      "※ 위쪽에 '디버깅을 시작했습니다' 표시가 떠도 정상입니다(사진 넣는 동안만). '취소'는 누르지 마세요."
+    "입력을 시작했습니다!" + pubMsg + " 글쓰기 화면 오른쪽 위 초록 상자로 진행 상황이 보입니다.\n" +
+      "※ 위쪽에 '디버깅을 시작했습니다' 표시가 떠도 정상입니다. '취소'는 누르지 마세요."
   );
 });
 

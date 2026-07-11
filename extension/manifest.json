@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "더몬스터학원 블로그 자동화",
-  "version": "1.7.1",
+  "version": "1.8.0",
   "description": "사진/주제로 네이버 블로그 글을 만들고, 네이버 글쓰기 화면에 자동으로 입력합니다.",
   "permissions": [
     "storage",
