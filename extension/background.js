@@ -181,31 +181,85 @@ function insertPara() {
 // 제목칸의 화면 좌표 (프레임 안이면 바깥 좌표로 환산) — 진짜 마우스 클릭용
 function titlePoint() {
   const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"], [class*="documentTitle"] [contenteditable="true"], .se-title-text [contenteditable="true"]';
-  let t = document.querySelector(sel);
-  if (!t) return null;
-  try { t.scrollIntoView({ block: "center" }); } catch (_) {}
-  let r = t.getBoundingClientRect();
-  // 크기가 0이면 부모(제목 컨테이너) 좌표로 대체
-  if (!r.width || !r.height) {
-    const cont = t.closest('[class*="documentTitle"], .se-title, .se-section-documentTitle') || t.parentElement;
-    if (cont) r = cont.getBoundingClientRect();
-  }
-  if (!r.width || !r.height) return null;
-  let x = r.left + Math.min(r.width / 2, 200);
-  let y = r.top + r.height / 2;
-  try {
-    let w = window;
-    while (w !== w.top) {
-      const fr = w.frameElement.getBoundingClientRect();
-      x += fr.left;
-      y += fr.top;
-      w = w.parent;
+    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"], [class*="documentTitle"], [class*=" documentTitle"], .se-title-text, .se-section-documentTitle, .se-documentTitle';
+  const toTop = (r, win) => {
+    let x = r.left + Math.min(r.width / 2, 200);
+    let y = r.top + r.height / 2;
+    try {
+      let w = win;
+      while (w !== w.top) {
+        const fr = w.frameElement.getBoundingClientRect();
+        x += fr.left;
+        y += fr.top;
+        w = w.parent;
+      }
+    } catch (_) {
+      return null;
     }
-  } catch (_) {
-    return null;
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+  // 후보를 모두 훑어 눈에 보이는(크기 있는) 것 중 가장 위쪽 요소를 고른다
+  const cands = [...document.querySelectorAll(sel)];
+  let best = null;
+  for (const el of cands) {
+    let r = el.getBoundingClientRect();
+    if (r.width < 40 || r.height < 8) {
+      const inner = el.querySelector('[contenteditable="true"], input, textarea');
+      if (inner) r = inner.getBoundingClientRect();
+    }
+    if (r.width >= 40 && r.height >= 8) {
+      if (!best || r.top < best.top) best = r;
+    }
   }
-  return { x: Math.round(x), y: Math.round(y) };
+  if (!best) {
+    if (!cands.length) return null;
+    try { cands[0].scrollIntoView({ block: "center" }); } catch (_) {}
+    best = cands[0].getBoundingClientRect();
+    if (best.width < 10 || best.height < 5) return { diag: "rect0" };
+  }
+  const pt = toTop(best, window);
+  return pt || { diag: "환산실패" };
+}
+
+// 인용구 박스의 '출처' 편집칸 좌표 (인용문과 같은 문장이 잘못 들어갔을 때 비우기용)
+function quoteCitePoint(sameText) {
+  const tSel =
+    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
+  if (document.querySelector(tSel)) return null;
+  const bodyEl = document.querySelector('[contenteditable="true"]');
+  if (!bodyEl) return null;
+  const toTop = (el, win) => {
+    const rr = el.getBoundingClientRect();
+    if (!rr.width || !rr.height) return null;
+    let x = rr.left + rr.width / 2;
+    let y = rr.top + rr.height / 2;
+    try {
+      let w = win;
+      while (w !== w.top) {
+        const fr = w.frameElement.getBoundingClientRect();
+        x += fr.left;
+        y += fr.top;
+        w = w.parent;
+      }
+    } catch (_) {
+      return null;
+    }
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+  // 마지막 인용구 박스 안에서 '출처/인용' placeholder 를 가진 칸
+  const boxes = bodyEl.querySelectorAll(".se-quotation, .se-component-quotation, blockquote, [class*='quotation']");
+  const box = boxes[boxes.length - 1];
+  const scope = box || bodyEl;
+  const cites = [...scope.querySelectorAll('[data-placeholder], [contenteditable="true"]')].filter((e) => {
+    const ph = e.getAttribute("data-placeholder") || "";
+    const cls = (typeof e.className === "string" ? e.className : "") || "";
+    return /출처|cite|source/i.test(ph + cls);
+  });
+  // 출처칸에 인용문과 같은 텍스트가 들어가 있으면 그 좌표 반환
+  const bad = cites.find((c) => (c.textContent || "").trim() && (!sameText || (c.textContent || "").indexOf(sameText.slice(0, 6)) !== -1));
+  const target = bad || cites[0];
+  if (!target) return null;
+  return toTop(target, window);
 }
 
 // 본문 프레임의 사진 개수 (삽입 성공 판정용) — 제목 프레임은 0 반환
@@ -439,11 +493,22 @@ function mapConfirmPoint() {
     }
     return { x: Math.round(x), y: Math.round(y) };
   };
-  const btn = [...document.querySelectorAll("button")].find((b) => {
+  const clickable = [...document.querySelectorAll('button, [role="button"], a')].filter((b) => {
     const rr = b.getBoundingClientRect();
-    return rr.width > 0 && rr.height > 0 && /^(확인|추가|완료|등록)$/.test((b.textContent || "").trim());
+    return rr.width > 0 && rr.height > 0;
   });
-  return btn ? toTop(btn, window) : null;
+  // 1) '확인' 계열 텍스트/속성 (포함 매칭)
+  let btn = clickable.find((b) => {
+    const s = (b.textContent || "").trim() + (b.getAttribute("aria-label") || "") + (b.getAttribute("title") || "") + (b.className || "");
+    return /확인|추가|완료|등록|삽입|적용|apply|confirm|submit/i.test(s);
+  });
+  if (btn) return toTop(btn, window);
+  // 2) 못 찾으면 화면에 보이는 버튼 텍스트들을 진단으로 (좌표는 없음)
+  const labels = clickable
+    .map((b) => (b.textContent || "").trim())
+    .filter((t) => t && t.length <= 8)
+    .slice(0, 8);
+  return { diag: "확인버튼후보:" + labels.join(",") };
 }
 
 // 예비 1: 가짜 paste 이벤트 (에디터가 스크립트 paste 를 받아줄 경우)
@@ -656,16 +721,22 @@ async function fillNaver(tabId, payload) {
       await say(tabId, "제목 입력 중…");
       if (attached) {
         try {
-          const pt = (await execAll(tabId, titlePoint)).filter(Boolean)[0];
+          const results = (await execAll(tabId, titlePoint)).filter(Boolean);
+          const pt = results.find((r) => r && typeof r.x === "number");
           if (pt) {
-            await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: pt.x, y: pt.y, button: "left", clickCount: 1 });
-            await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: pt.x, y: pt.y, button: "left", clickCount: 1 });
+            // 더블클릭으로 확실히 포커스 (한 번 클릭이 안 먹는 경우 대비)
+            await clickAt(tabId, pt);
+            await sleep(200);
+            await clickAt(tabId, pt);
             await sleep(300);
             await cdp(tabId, "Input.insertText", { text: payload.title });
             await sleep(300);
             titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
-            if (!titleOk) notes.push("title:클릭입력 무반응(" + pt.x + "," + pt.y + ")");
-          } else notes.push("title:좌표없음");
+            if (!titleOk) notes.push("title:클릭입력무반응(" + pt.x + "," + pt.y + ")");
+          } else {
+            const d = results.map((r) => r && r.diag).filter(Boolean).join("/");
+            notes.push("title:좌표없음" + (d ? "(" + d + ")" : ""));
+          }
         } catch (e) {
           notes.push("title:" + (e && e.message ? e.message : e));
         }
@@ -770,7 +841,24 @@ async function fillNaver(tabId, payload) {
               quoteApplied = typedIn && after.n > (before.n || 0) && after.lastLen > 0;
               if (quoteApplied) bodyTyped = true;
               else notes.push("인용:박스" + (after.n > (before.n || 0) ? "생김" : "안생김") + " 안글자" + after.lastLen + (typedIn ? "" : " 타이핑실패"));
+              // 출처칸에 같은 문장이 복제됐으면 클릭해서 비운다 (전체선택 후 삭제, trusted)
+              if (quoteApplied) {
+                const cite = (await execAll(tabId, quoteCitePoint, [seg.text])).filter(Boolean)[0];
+                if (cite && typeof cite.x === "number") {
+                  await clickAt(tabId, cite);
+                  await sleep(200);
+                  const a = { modifiers: 2, key: "a", code: "KeyA", windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 };
+                  await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...a });
+                  await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...a });
+                  await sleep(120);
+                  const del = { key: "Delete", code: "Delete", windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 };
+                  await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...del });
+                  await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...del });
+                  await sleep(150);
+                }
+              }
               // 박스 밖으로 탈출 (아래 방향키)
+              await execAll(tabId, focusBodyEnd);
               const dk = { key: "ArrowDown", code: "ArrowDown", windowsVirtualKeyCode: 40, nativeVirtualKeyCode: 40 };
               await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...dk });
               await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...dk });
@@ -820,15 +908,19 @@ async function fillNaver(tabId, payload) {
             await pressEnter(tabId);
             await sleep(2200);
             const rp = (await execAll(tabId, mapResultPoint, ["더몬스터"])).filter(Boolean)[0];
-            if (rp) {
+            if (rp && typeof rp.x === "number") {
               await clickAt(tabId, rp);
-              await sleep(800);
-              const cf = (await execAll(tabId, mapConfirmPoint)).filter(Boolean)[0];
+              await sleep(1000);
+              const cfs = (await execAll(tabId, mapConfirmPoint)).filter(Boolean);
+              const cf = cfs.find((c) => c && typeof c.x === "number");
               if (cf) {
                 await clickAt(tabId, cf);
-                await sleep(1200);
+                await sleep(1400);
                 mapOk = true;
-              } else notes.push("지도:확인버튼없음");
+              } else {
+                const d = cfs.map((c) => c && c.diag).filter(Boolean).join(" ");
+                notes.push("지도:확인버튼없음 " + d);
+              }
             } else notes.push("지도:검색결과없음");
           } else notes.push("지도:검색창없음");
         } else notes.push("지도:장소버튼없음");
