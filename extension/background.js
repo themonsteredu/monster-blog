@@ -344,18 +344,17 @@ function quoteStyleOption() {
     (x.getAttribute("data-log") || "") +
     (x.getAttribute("aria-label") || "") +
     (x.getAttribute("title") || "");
+  // 드롭다운 '옵션'만 대상 (select-button 본체는 제외 — 그건 옵션이 아님)
   const els = [...document.querySelectorAll("button, [role='button'], li, a")].filter((x) => {
     const rr = x.getBoundingClientRect();
     if (!rr.width || !rr.height) return false;
-    return /quotation|인용/i.test(idv(x)) || /세로/.test((x.textContent || "").trim());
+    const v = idv(x);
+    if (/select-button/i.test(v)) return false; // 드롭다운 여는 버튼 자체는 제외
+    return /se-toolbar-option-[\w-]*button/i.test(v) || (/quotation|인용/i.test(v) && /option|list|layer/i.test(v)) || /세로/.test((x.textContent || "").trim());
   });
-  // 세로줄 우선 → 목록의 두 번째(보통 1번이 기본 따옴표) → 아무거나
-  let o = els.find((x) => /line|vertical/i.test(idv(x)) || /세로/.test(idv(x) + (x.textContent || "")));
-  if (!o) {
-    const opts = els.filter((x) => /option|list|layer/i.test(idv(x)) || x.tagName === "LI");
-    if (opts.length > 1) o = opts[1];
-    else if (opts.length === 1) o = opts[0];
-  }
+  // 세로줄(line) 우선
+  let o = els.find((x) => /line|vertical|세로/i.test(idv(x) + (x.textContent || "")));
+  if (!o && els.length) o = els[0];
   if (!o) return null;
   const pt = toTop(o, window);
   return pt ? { pt, id: idv(o).slice(0, 40), n: els.length } : null;
@@ -368,9 +367,45 @@ function quoteCount() {
   if (document.querySelector(tSel)) return null;
   const bodyEl = document.querySelector('[contenteditable="true"]');
   if (!bodyEl) return null;
-  const qs = bodyEl.querySelectorAll(".se-quotation, .se-component-quotation, blockquote, [class*='quotation']");
+  const qs = bodyEl.querySelectorAll(
+    ".se-quotation, .se-component-quotation, .se-quote, blockquote, [class*='quotation'], [class*='se-quote']"
+  );
   const last = qs[qs.length - 1];
   return { n: qs.length, lastLen: last ? (last.textContent || "").trim().length : -1 };
+}
+
+// 방금 만들어진 마지막 인용구 박스 '안'에 커서를 두고 문장을 타이핑
+async function typeInLastQuote(text) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const tSel =
+    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
+  if (document.querySelector(tSel)) return false;
+  const bodyEl = document.querySelector('[contenteditable="true"]');
+  if (!bodyEl) return false;
+  const boxes = bodyEl.querySelectorAll(
+    ".se-quotation, .se-component-quotation, .se-quote, blockquote, [class*='quotation'], [class*='se-quote']"
+  );
+  const box = boxes[boxes.length - 1];
+  if (!box) return false;
+  // 인용문 본문 영역(출처 칸 제외)에 커서
+  const areas = [...box.querySelectorAll('.se-text-paragraph, [contenteditable], p, span')].filter((e) => {
+    const ph = (e.getAttribute("data-placeholder") || "") + (typeof e.className === "string" ? e.className : "");
+    return !/출처|cite|source/i.test(ph);
+  });
+  const target = areas[0] || box;
+  bodyEl.focus();
+  const r = document.createRange();
+  r.selectNodeContents(target);
+  r.collapse(true);
+  const s = window.getSelection();
+  s.removeAllRanges();
+  s.addRange(r);
+  await sleep(50);
+  for (const ch of text) {
+    document.execCommand("insertText", false, ch);
+    await sleep(8);
+  }
+  return true;
 }
 
 // 커서 위치 그대로 타이핑 (빈 인용구 박스 '안'에 문장을 넣을 때 사용 — 끝으로 이동하지 않음)
@@ -880,43 +915,39 @@ async function fillNaver(tabId, payload) {
     } catch (_) {}
     await sleep(400);
 
-    // 4) 제목: 진짜 마우스 클릭으로 제목칸 포커스 → trusted insertText → 예비 방식들
+    // 4) 제목: 진짜 마우스 클릭으로 제목칸 포커스 → 전체선택 비우기 → trusted insertText
+    //    (본문 오염 방지를 위해 JS 타이핑 예비는 쓰지 않고, 실패 시 클립보드 안내로만)
     let titleOk = false;
     if (payload.title) {
       await say(tabId, "제목 입력 중…");
       if (attached) {
-        try {
-          const results = (await execAll(tabId, titlePoint)).filter(Boolean);
-          const pt = results.find((r) => r && typeof r.x === "number");
-          if (pt) {
-            // 더블클릭으로 확실히 포커스 (한 번 클릭이 안 먹는 경우 대비)
-            await clickAt(tabId, pt);
-            await sleep(200);
-            await clickAt(tabId, pt);
-            await sleep(300);
-            await cdp(tabId, "Input.insertText", { text: payload.title });
-            await sleep(300);
-            titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
-            if (!titleOk) notes.push("title:클릭입력무반응(" + pt.x + "," + pt.y + ")");
-          } else {
-            const d = results.map((r) => r && r.diag).filter(Boolean).join("/");
-            notes.push("title:좌표없음" + (d ? "(" + d + ")" : ""));
+        const results = (await execAll(tabId, titlePoint)).filter(Boolean);
+        const pt = results.find((r) => r && typeof r.x === "number");
+        if (pt) {
+          for (let tryN = 0; tryN < 2 && !titleOk; tryN++) {
+            try {
+              await clickAt(tabId, pt);
+              await sleep(300);
+              // 기존 내용/자동 채워진 것 비우기 (Ctrl+A → Delete)
+              const a = { modifiers: 2, key: "a", code: "KeyA", windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 };
+              await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...a });
+              await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...a });
+              await sleep(120);
+              const del = { key: "Delete", code: "Delete", windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 };
+              await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...del });
+              await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...del });
+              await sleep(120);
+              await cdp(tabId, "Input.insertText", { text: payload.title });
+              await sleep(350);
+              titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
+            } catch (e) {
+              notes.push("title:" + (e && e.message ? e.message : e));
+            }
           }
-        } catch (e) {
-          notes.push("title:" + (e && e.message ? e.message : e));
-        }
-      }
-      if (!titleOk) {
-        const focused = (await execAll(tabId, focusTitle, [], notes, "titleFocus")).some(Boolean);
-        if (focused && attached) {
-          try {
-            await cdp(tabId, "Input.insertText", { text: payload.title });
-            await sleep(300);
-            titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
-          } catch (_) {}
-        }
-        if (!titleOk && focused) {
-          titleOk = (await execAll(tabId, typeTitleFallback, [payload.title])).some(Boolean);
+          if (!titleOk) notes.push("title:클릭입력무반응(" + pt.x + "," + pt.y + ")");
+        } else {
+          const d = results.map((r) => r && r.diag).filter(Boolean).join("/");
+          notes.push("title:좌표없음" + (d ? "(" + d + ")" : ""));
         }
       }
     }
@@ -977,35 +1008,30 @@ async function fillNaver(tabId, payload) {
           if (bp) {
             try {
               await execAll(tabId, focusBodyEnd);
-              let opened = false;
-              if (bp.arrow) {
-                // ▾ 화살표 → 스타일 목록 → 세로줄
-                await clickAt(tabId, bp.arrow);
-                await sleep(600);
-                const opt = (await execAll(tabId, quoteStyleOption)).filter(Boolean)[0];
-                if (opt && opt.pt) {
-                  await clickAt(tabId, opt.pt);
-                  await sleep(600);
-                  opened = true;
-                  notes.push("인용스타일:" + opt.id);
-                }
+              await sleep(150);
+              // 1) 인용구 '선택 버튼'을 눌러 스타일 드롭다운을 연다
+              await clickAt(tabId, bp.btn);
+              await sleep(700);
+              // 2) 드롭다운에서 '세로줄(line)' 옵션을 눌러 그 스타일의 박스를 삽입
+              const opt = (await execAll(tabId, quoteStyleOption)).filter(Boolean)[0];
+              if (opt && opt.pt) {
+                await clickAt(tabId, opt.pt);
+                await sleep(800);
+                notes.push("인용스타일:" + opt.id);
+              } else {
+                notes.push("인용:옵션못찾음");
               }
-              if (!opened) {
-                // 화살표가 없으면 본 버튼 (마지막 사용 스타일로 삽입됨)
-                await clickAt(tabId, bp.btn);
-                await sleep(600);
-                const opt = (await execAll(tabId, quoteStyleOption)).filter(Boolean)[0];
-                if (opt && opt.pt) {
-                  await clickAt(tabId, opt.pt);
-                  await sleep(600);
-                }
+              // 3) 새 박스가 생겼는지 확인하고, 그 박스 '안'에 문장을 타이핑
+              let after = (await execAll(tabId, quoteCount)).filter(Boolean)[0] || { n: 0, lastLen: -1 };
+              const boxMade = after.n > (before.n || 0);
+              let typedIn = false;
+              if (boxMade) {
+                typedIn = (await execAll(tabId, typeInLastQuote, [seg.text], notes, "quoteType")).some(Boolean);
+                after = (await execAll(tabId, quoteCount)).filter(Boolean)[0] || after;
               }
-              // 커서가 새 빈 박스 안에 있음 → 문장을 그 자리에 타이핑
-              const typedIn = (await execAll(tabId, typeHere, [seg.text], notes, "quoteType")).some(Boolean);
-              const after = (await execAll(tabId, quoteCount)).filter(Boolean)[0] || { n: 0, lastLen: -1 };
-              quoteApplied = typedIn && after.n > (before.n || 0) && after.lastLen > 0;
+              quoteApplied = boxMade && typedIn && after.lastLen > 0;
               if (quoteApplied) bodyTyped = true;
-              else notes.push("인용:박스" + (after.n > (before.n || 0) ? "생김" : "안생김") + " 안글자" + after.lastLen + (typedIn ? "" : " 타이핑실패"));
+              else notes.push("인용:박스" + (boxMade ? "생김" : "안생김") + " 안글자" + after.lastLen + (typedIn ? "" : " 타이핑실패"));
               // 출처칸에 같은 문장이 복제됐으면 클릭해서 비운다 (전체선택 후 삭제, trusted)
               if (quoteApplied) {
                 const cite = (await execAll(tabId, quoteCitePoint, [seg.text])).filter(Boolean)[0];
