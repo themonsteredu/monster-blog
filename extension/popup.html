@@ -49,6 +49,15 @@
     <option>실사</option>
   </select>
 
+  <label>발행 방식</label>
+  <select id="pubmode">
+    <option value="none">임시저장만 (내가 직접 발행)</option>
+    <option value="now">바로 발행</option>
+    <option value="reserve">예약 발행</option>
+  </select>
+  <input type="datetime-local" id="pubwhen" style="display:none" />
+  <p class="hint" id="pubhint" style="display:none">예약 시간을 고르세요. 그 시간에 네이버가 자동 발행합니다(컴퓨터 꺼도 됨).</p>
+
   <button id="generate" class="primary">✨ 글 생성</button>
   <div id="status" class="status"></div>
 

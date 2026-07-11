@@ -511,6 +511,102 @@ function mapConfirmPoint() {
   return { diag: "확인버튼후보:" + labels.join(",") };
 }
 
+// ---------- 발행용 좌표 찾기 (모두: 어느 프레임이든 찾으면 맨 바깥 좌표로 환산) ----------
+function _toTopFactory() {}
+
+// 상단 '발행' 버튼
+function publishOpenPoint() {
+  const toTop = (el, win) => {
+    const rr = el.getBoundingClientRect();
+    if (!rr.width || !rr.height) return null;
+    let x = rr.left + rr.width / 2, y = rr.top + rr.height / 2;
+    try { let w = win; while (w !== w.top) { const fr = w.frameElement.getBoundingClientRect(); x += fr.left; y += fr.top; w = w.parent; } } catch (_) { return null; }
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+  const cand = [...document.querySelectorAll('button, [role="button"], a')].filter((b) => {
+    const rr = b.getBoundingClientRect();
+    if (rr.width < 20 || rr.height < 10) return false;
+    const s = (b.textContent || "").trim() + (b.getAttribute("class") || "") + (b.getAttribute("data-click-area") || "") + (b.getAttribute("data-log") || "");
+    return /발행|publish/i.test(s);
+  });
+  // 화면 오른쪽 위(상단 툴바)의 발행 버튼 우선
+  cand.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+  const btn = cand[0];
+  return btn ? toTop(btn, window) : null;
+}
+
+// 발행 레이어 안의 '예약' 라디오/버튼
+function reserveRadioPoint() {
+  const toTop = (el, win) => {
+    const rr = el.getBoundingClientRect();
+    if (!rr.width || !rr.height) return null;
+    let x = rr.left + rr.width / 2, y = rr.top + rr.height / 2;
+    try { let w = win; while (w !== w.top) { const fr = w.frameElement.getBoundingClientRect(); x += fr.left; y += fr.top; w = w.parent; } } catch (_) { return null; }
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+  const el = [...document.querySelectorAll('label, button, [role="radio"], span, a')].find((b) => {
+    const rr = b.getBoundingClientRect();
+    return rr.width > 0 && rr.height > 0 && /^예약/.test((b.textContent || "").trim());
+  });
+  return el ? toTop(el, window) : null;
+}
+
+// 발행 레이어 안의 날짜/시간 입력 후보 좌표 + 종류
+function reserveFieldPoints() {
+  const toTop = (el, win) => {
+    const rr = el.getBoundingClientRect();
+    if (!rr.width || !rr.height) return null;
+    let x = rr.left + rr.width / 2, y = rr.top + rr.height / 2;
+    try { let w = win; while (w !== w.top) { const fr = w.frameElement.getBoundingClientRect(); x += fr.left; y += fr.top; w = w.parent; } } catch (_) { return null; }
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+  const out = { inputs: [], selects: [] };
+  document.querySelectorAll("input").forEach((i) => {
+    const rr = i.getBoundingClientRect();
+    if (rr.width < 20 || rr.height < 10) return;
+    const meta = (i.type || "") + (i.placeholder || "") + (i.className || "") + (i.getAttribute("aria-label") || "");
+    if (/date|time|시|분|년|월|일|hour|min/i.test(meta) || i.type === "date" || i.type === "time") {
+      const pt = toTop(i, window);
+      if (pt) out.inputs.push({ pt, meta: meta.slice(0, 30) });
+    }
+  });
+  document.querySelectorAll("select").forEach((s) => {
+    const rr = s.getBoundingClientRect();
+    if (rr.width < 20 || rr.height < 10) return;
+    const pt = toTop(s, window);
+    if (pt) out.selects.push({ pt, meta: (s.className || "").slice(0, 30) });
+  });
+  return out;
+}
+
+// 발행 레이어 하단의 최종 '발행' 확정 버튼
+function publishConfirmPoint() {
+  const toTop = (el, win) => {
+    const rr = el.getBoundingClientRect();
+    if (!rr.width || !rr.height) return null;
+    let x = rr.left + rr.width / 2, y = rr.top + rr.height / 2;
+    try { let w = win; while (w !== w.top) { const fr = w.frameElement.getBoundingClientRect(); x += fr.left; y += fr.top; w = w.parent; } } catch (_) { return null; }
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+  const cand = [...document.querySelectorAll('button, [role="button"], a')].filter((b) => {
+    const rr = b.getBoundingClientRect();
+    if (rr.width < 20 || rr.height < 10) return false;
+    const s = (b.textContent || "").trim();
+    const meta = (b.getAttribute("class") || "") + (b.getAttribute("data-click-area") || "") + (b.getAttribute("data-testid") || "");
+    // 레이어 안의 확정 버튼: 텍스트가 정확히 '발행' 이거나 confirm 계열
+    return /^발행$/.test(s) || /confirm|publish.*btn|btn.*publish|submit/i.test(meta);
+  });
+  // 화면에서 가장 아래쪽(레이어 하단) 것을 확정 버튼으로
+  cand.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+  if (!cand.length) {
+    const labels = [...document.querySelectorAll('button, [role="button"]')]
+      .filter((b) => { const rr = b.getBoundingClientRect(); return rr.width > 0 && rr.height > 0; })
+      .map((b) => (b.textContent || "").trim()).filter((t) => t && t.length <= 8).slice(0, 10);
+    return { diag: "발행버튼후보:" + labels.join(",") };
+  }
+  return toTop(cand[0], window);
+}
+
 // 예비 1: 가짜 paste 이벤트 (에디터가 스크립트 paste 를 받아줄 경우)
 function syntheticPaste(b64, type) {
   const sel =
@@ -670,6 +766,75 @@ async function insertImage(tabId, im, attached, notes) {
   } catch (_) {}
 
   return null;
+}
+
+// ---------- 발행 흐름 ----------
+// 상단 발행 버튼 → (예약이면 예약 선택 + 시간 설정) → 레이어 하단 발행 확정
+async function doPublish(tabId, pub, notes) {
+  try {
+    await say(tabId, pub.mode === "reserve" ? "예약 발행 처리 중…" : "발행 중…");
+    const op = (await execAll(tabId, publishOpenPoint)).filter(Boolean)[0];
+    if (!op || typeof op.x !== "number") {
+      notes.push("발행:상단버튼없음");
+      return "발행 버튼을 못 찾았어요 — 직접 발행해 주세요";
+    }
+    await clickAt(tabId, op);
+    await sleep(1500);
+
+    if (pub.mode === "reserve") {
+      // 예약 라디오 클릭
+      const rr = (await execAll(tabId, reserveRadioPoint)).filter(Boolean)[0];
+      if (rr && typeof rr.x === "number") {
+        await clickAt(tabId, rr);
+        await sleep(800);
+      } else {
+        notes.push("발행:예약버튼없음");
+        return "발행창은 열렸어요. 예약 시간만 직접 고르고 발행을 눌러주세요";
+      }
+      // 날짜/시간 입력 시도 (input[type=date/time] 이 있으면 그 값으로)
+      const when = (pub.when || "").split("T"); // ["YYYY-MM-DD","HH:MM"]
+      const fields = (await execAll(tabId, reserveFieldPoints)).filter(Boolean)[0] || { inputs: [], selects: [] };
+      let setOk = false;
+      if (fields.inputs && fields.inputs.length && when.length === 2) {
+        for (const f of fields.inputs) {
+          try {
+            await clickAt(tabId, f.pt);
+            await sleep(200);
+            const isTime = /time|시|분|:/i.test(f.meta);
+            const val = isTime ? when[1] : when[0];
+            // 전체 선택 후 새 값 입력
+            const a = { modifiers: 2, key: "a", code: "KeyA", windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 };
+            await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...a });
+            await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...a });
+            await cdp(tabId, "Input.insertText", { text: val });
+            await sleep(200);
+            setOk = true;
+          } catch (_) {}
+        }
+      }
+      if (!setOk) {
+        // 시간 입력칸을 못 다뤘으면 안전하게 멈춤 (엉뚱한 시간 자동발행 방지)
+        notes.push("발행:예약시간칸못찾음 in" + (fields.inputs || []).length + " sel" + (fields.selects || []).length);
+        return "예약창을 열고 '예약'을 선택했어요. 시간만 직접 맞추고 발행을 눌러주세요";
+      }
+      await sleep(500);
+    }
+
+    // 최종 발행 확정 버튼
+    const cfs = (await execAll(tabId, publishConfirmPoint)).filter(Boolean);
+    const cf = cfs.find((c) => c && typeof c.x === "number");
+    if (!cf) {
+      const d = cfs.map((c) => c && c.diag).filter(Boolean).join(" ");
+      notes.push("발행:확정버튼없음 " + d);
+      return "발행창은 열렸어요. 마지막 발행 버튼만 직접 눌러주세요";
+    }
+    await clickAt(tabId, cf);
+    await sleep(2500);
+    return pub.mode === "reserve" ? "예약됨! 그 시간에 자동 발행됩니다" : "발행 완료!";
+  } catch (e) {
+    notes.push("발행:" + (e && e.message ? e.message : e));
+    return "발행 중 문제 — 직접 발행해 주세요";
+  }
 }
 
 // ---------- 메인 흐름 ----------
@@ -889,6 +1054,17 @@ async function fillNaver(tabId, payload) {
       }
     }
 
+    // 6.4) 하단 연락처 배너 이미지 (글 맨 끝에)
+    if (payload.footer && attached) {
+      await say(tabId, "하단 연락처 배너 넣는 중…");
+      await execAll(tabId, focusBodyEnd);
+      await sendEnter(tabId, attached);
+      const how = await insertImage(tabId, payload.footer, attached, notes);
+      if (!how) notes.push("배너:실패");
+      await execAll(tabId, focusBodyEnd);
+      await sendEnter(tabId, attached);
+    }
+
     // 6.5) 지도(장소) 첨부 — 장소 버튼 → "더몬스터학원" 검색 → 첫 결과 추가 (실험 기능)
     let mapOk = false;
     if (attached) {
@@ -929,6 +1105,15 @@ async function fillNaver(tabId, payload) {
       }
     }
 
+    // 6.6) 발행 (바로발행/예약발행) — 사용자가 고른 경우만
+    let pubNote = "";
+    const pub = payload.publish || { mode: "none" };
+    if (pub.mode !== "none" && attached) {
+      pubNote = await doPublish(tabId, pub, notes);
+    } else if (pub.mode !== "none") {
+      pubNote = "발행 자동화는 디버거가 필요해요(F12 닫고 다시 시도)";
+    }
+
     // 7) 마무리 정리 + 결과 표시
     if (!titleOk && payload.title && attached) {
       // 사진 붙여넣기로 클립보드가 바뀌었을 수 있으니 제목을 다시 복사해 둔다
@@ -949,13 +1134,14 @@ async function fillNaver(tabId, payload) {
     const quoteNotes = notes.filter((n) => n.indexOf("인용:") === 0);
     const quoteNote = quoteNotes.length ? "인용구 박스 일부 실패(문장은 들어감) — " + quoteNotes.slice(0, 2).join(" | ") : "";
     const mapNote = mapOk ? "지도 첨부됨 (위치 확인해 주세요)" : "지도 자동첨부 실패 — 장소 버튼에서 '더몬스터학원' 검색하면 됩니다";
-    const hasIssue = (imgTotal > 0 && imgOk < imgTotal) || quoteNotes.length > 0;
-    const diagLine = hasIssue || !mapOk ? "\n진단: " + notes.slice(0, 6).join(" | ") : "";
+    const closeMsg = pub.mode === "none" ? "내용 확인 후 발행해 주세요." : (pubNote || "발행 처리 완료");
+    const hasIssue = (imgTotal > 0 && imgOk < imgTotal) || quoteNotes.length > 0 || (pub.mode !== "none" && !/완료|예약됨/.test(pubNote));
+    const diagLine = hasIssue || !mapOk ? "\n진단: " + notes.slice(0, 7).join(" | ") : "";
     await say(
       tabId,
-      `✅ ${titleNote}${imgNote ? "\n🖼️ " + imgNote : ""}${quoteNote ? "\n💬 " + quoteNote : ""}\n📍 ${mapNote}\n내용 확인 후 발행해 주세요.${diagLine}`,
+      `✅ ${titleNote}${imgNote ? "\n🖼️ " + imgNote : ""}${quoteNote ? "\n💬 " + quoteNote : ""}\n📍 ${mapNote}\n🚀 ${closeMsg}${diagLine}`,
       hasIssue,
-      40000
+      50000
     );
   } catch (e) {
     await say(tabId, "오류: " + (e && e.message ? e.message : e) + "\n" + notes.slice(0, 4).join(" | "), true, 20000);
