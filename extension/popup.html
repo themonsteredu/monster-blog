@@ -16,10 +16,33 @@
     <input type="password" id="apiKey" placeholder="sk-ant-..." />
     <label>OpenAI API 키 (선택 — AI 이미지 생성용)</label>
     <input type="password" id="openaiKey" placeholder="sk-... (비우면 카드 이미지 자동 생성)" />
-    <label>전용 틀 (글 작성 규칙)</label>
-    <textarea id="template" rows="6" placeholder="비워두면 기본 규칙 사용"></textarea>
+
+    <div class="sect">🏫 우리 학원 정보 (글·하단 배너·지도에 자동 반영)</div>
+    <label>학원명</label>
+    <input type="text" id="p_name" placeholder="예: 더몬스터학원" />
+    <label>한 줄 소개</label>
+    <input type="text" id="p_tagline" placeholder="예: 광주 동구 계림동 · 초등3~고3 수학·교과 전문" />
+    <label>전화</label>
+    <input type="text" id="p_phone" placeholder="예: 062-653-1599" />
+    <label>문자</label>
+    <input type="text" id="p_sms" placeholder="예: 010-7627-1003" />
+    <label>카카오톡 채널 주소</label>
+    <input type="text" id="p_kakao" placeholder="예: http://pf.kakao.com/_WNxezn" />
+    <label>네이버 톡톡 주소 (선택)</label>
+    <input type="text" id="p_talktalk" placeholder="예: https://talk.naver.com/ct/..." />
+    <label>주소</label>
+    <input type="text" id="p_address" placeholder="예: 광주광역시 동구 경양로234 118동상가 716호" />
+    <label>운영 시간</label>
+    <input type="text" id="p_hours" placeholder="예: 평일 오후 2시~밤 10시 / 토요일 오전 9시~오후 8시 30분" />
+    <label>지역 키워드 (검색용, 쉼표로)</label>
+    <input type="text" id="p_region" placeholder="예: 계림동, 광주 동구, 광주" />
+    <label>고정 해시태그 (쉼표로)</label>
+    <input type="text" id="p_hashtags" placeholder="예: 계림동수학학원, 광주수학학원, 동구수학학원" />
+
+    <label>전용 틀 (고급 — 비우면 위 정보로 자동 생성)</label>
+    <textarea id="template" rows="4" placeholder="비워두면 위 학원 정보로 규칙을 자동 생성합니다"></textarea>
     <button id="saveSettings" class="ghost">설정 저장</button>
-    <p class="hint">키는 이 브라우저에만 저장됩니다(외부 전송 없음).</p>
+    <p class="hint">키·학원 정보는 이 브라우저에만 저장됩니다(외부 전송 없음).</p>
   </details>
 
   <!-- ===== 입력 ===== -->

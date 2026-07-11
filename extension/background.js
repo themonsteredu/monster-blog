@@ -1091,7 +1091,8 @@ async function fillNaver(tabId, payload) {
       await sendEnter(tabId, attached);
     }
 
-    // 6.5) 지도(장소) 첨부 — 장소 버튼 → "더몬스터학원" 검색 → 첫 결과 추가 (실험 기능)
+    // 6.5) 지도(장소) 첨부 — 장소 버튼 → 학원명 검색 → 첫 결과 추가 (실험 기능)
+    const academyName = (payload.academy && payload.academy.name) || "더몬스터학원";
     let mapOk = false;
     if (attached) {
       try {
@@ -1105,11 +1106,11 @@ async function fillNaver(tabId, payload) {
           if (sp) {
             await clickAt(tabId, sp);
             await sleep(250);
-            await cdp(tabId, "Input.insertText", { text: "더몬스터학원" });
+            await cdp(tabId, "Input.insertText", { text: academyName });
             await sleep(250);
             await pressEnter(tabId);
             await sleep(2200);
-            const rp = (await execAll(tabId, mapResultPoint, ["더몬스터"])).filter(Boolean)[0];
+            const rp = (await execAll(tabId, mapResultPoint, [academyName.slice(0, 4)])).filter(Boolean)[0];
             if (rp && typeof rp.x === "number") {
               await clickAt(tabId, rp);
               await sleep(1000);
@@ -1159,7 +1160,7 @@ async function fillNaver(tabId, payload) {
       : "";
     const quoteNotes = notes.filter((n) => n.indexOf("인용:") === 0);
     const quoteNote = quoteNotes.length ? "인용구 박스 일부 실패(문장은 들어감) — " + quoteNotes.slice(0, 2).join(" | ") : "";
-    const mapNote = mapOk ? "지도 첨부됨 (위치 확인해 주세요)" : "지도 자동첨부 실패 — 장소 버튼에서 '더몬스터학원' 검색하면 됩니다";
+    const mapNote = mapOk ? "지도 첨부됨 (위치 확인해 주세요)" : "지도 자동첨부 실패 — 장소 버튼에서 '" + academyName + "' 검색하면 됩니다";
     const closeMsg = pub.mode === "none" ? "내용 확인 후 발행해 주세요." : (pubNote || "발행 처리 완료");
     const hasIssue = (imgTotal > 0 && imgOk < imgTotal) || quoteNotes.length > 0 || (pub.mode !== "none" && !/완료|예약됨/.test(pubNote));
     const diagLine = hasIssue || !mapOk ? "\n진단: " + notes.slice(0, 7).join(" | ") : "";
