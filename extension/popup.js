@@ -582,6 +582,14 @@ function dumpEditor() {
   // 장소/지도 관련
   const mapBtn = [...document.querySelectorAll("button")].filter((b) => /장소|지도|map|place/i.test((b.getAttribute("aria-label") || "") + (b.className || "") + b.textContent));
   out.push("장소버튼(" + mapBtn.length + "): " + mapBtn.slice(0, 3).map(tc).join(" "));
+  // 지도 검색창이 열려 있으면: 보이는 입력칸 + 결과 항목 구조도 (장소창 열고 검색 후 진단 누르면 잡힘)
+  const vin = [...document.querySelectorAll("input")].filter((i) => i.getBoundingClientRect().width > 20);
+  if (vin.length) out.push("입력칸(" + vin.length + "): " + vin.slice(0, 5).map((i) => "[" + (i.type || "") + " ph=" + (i.placeholder || "") + " cls=" + (i.className || "").slice(0, 20) + "]").join(" "));
+  const listItems = [...document.querySelectorAll('li, [class*="item"], [class*="result"], [class*="place"]')].filter((e) => {
+    const r = e.getBoundingClientRect();
+    return r.width > 40 && r.height > 20 && r.height < 160 && (e.textContent || "").trim().length > 2;
+  });
+  if (listItems.length) out.push("목록항목(" + listItems.length + "): " + listItems.slice(0, 4).map((e) => (typeof e.className === "string" ? e.className : "").slice(0, 30) + "『" + (e.textContent || "").trim().slice(0, 14) + "』").join(" | "));
   return out.join("\n");
 }
 

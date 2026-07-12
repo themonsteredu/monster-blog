@@ -108,6 +108,19 @@ function titleIsEmpty() {
   return v.length === 0;
 }
 
+// 지금 커서(포커스)가 '제목' 영역 안에 있는지 — 제목에 확실히 들어갈 때만 입력하려는 안전장치
+function titleFocused() {
+  const ae = document.activeElement;
+  if (!ae) return false;
+  // 활성 요소 자신이나 조상이 제목 컨테이너/제목 속성이면 true
+  if (ae.closest && ae.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) return true;
+  const ph = (ae.getAttribute && (ae.getAttribute("placeholder") || ae.getAttribute("data-placeholder") || ae.getAttribute("aria-label"))) || "";
+  if (/제목/.test(ph)) return true;
+  // 반대로, 본문 컴포넌트 안이면 명확히 false
+  if (ae.closest && ae.closest('.se-component:not(.se-documentTitle), .se-text-paragraph')) return false;
+  return false;
+}
+
 function typeTitleFallback(title) {
   const sel =
     'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
@@ -977,31 +990,23 @@ async function fillNaver(tabId, payload) {
         const results = (await execAll(tabId, titlePoint)).filter(Boolean);
         const pt = results.find((r) => r && typeof r.x === "number");
         if (pt) {
-          // ★ 딱 한 번만 넣는다 (재시도하면 제목에 글이 여러 번 겹쳐 써짐)
+          // ★ 딱 한 번만, 그리고 '커서가 진짜 제목칸에 있을 때만' 넣는다.
+          //    (본문에 잘못 들어가 제목/본문이 오염되던 문제 방지 — 확실치 않으면 클립보드 붙여넣기로만)
           try {
-            // 제목이 이미 비어 있는지 확인 — 비어 있으면 굳이 지우지 않는다(잘못된 포커스에서 Ctrl+A+Delete 위험 방지)
-            const emptyArr = (await execAll(tabId, titleIsEmpty)).filter((v) => v !== null);
-            const titleEmpty = emptyArr.length ? emptyArr.some(Boolean) : true;
             await clickAt(tabId, pt);
-            await sleep(300);
-            if (!titleEmpty) {
-              // 제목칸에 뭔가 있을 때만 비우기 (제목 프레임에 포커스가 확실할 때)
-              const a = { modifiers: 2, key: "a", code: "KeyA", windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 };
-              await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...a });
-              await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...a });
-              await sleep(100);
-              const del = { key: "Delete", code: "Delete", windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 };
-              await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...del });
-              await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...del });
-              await sleep(100);
-            }
-            await cdp(tabId, "Input.insertText", { text: payload.title });
             await sleep(350);
-            titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
+            const focusedTitle = (await execAll(tabId, titleFocused)).some(Boolean);
+            if (focusedTitle) {
+              await cdp(tabId, "Input.insertText", { text: payload.title });
+              await sleep(350);
+              titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
+              if (!titleOk) notes.push("title:입력후확인안됨(" + (pt.tag || "") + ")");
+            } else {
+              notes.push("title:제목포커스실패(" + (pt.tag || "") + ") → 클립보드로");
+            }
           } catch (e) {
             notes.push("title:" + (e && e.message ? e.message : e));
           }
-          if (!titleOk) notes.push("title:확인안됨(" + pt.x + "," + pt.y + " " + (pt.tag || "") + ")");
         } else {
           const d = results.map((r) => r && r.diag).filter(Boolean).join("/");
           notes.push("title:좌표없음" + (d ? "(" + d + ")" : ""));
