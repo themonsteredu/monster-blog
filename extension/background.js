@@ -179,9 +179,8 @@ function insertPara() {
 }
 
 // 제목칸의 화면 좌표 (프레임 안이면 바깥 좌표로 환산) — 진짜 마우스 클릭용
+// 툴바 버튼(aria-label 에 '제목'이 있어도)은 제외하고, 실제 '제목 입력 영역'만 고른다.
 function titlePoint() {
-  const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"], [class*="documentTitle"], [class*=" documentTitle"], .se-title-text, .se-section-documentTitle, .se-documentTitle';
   const toTop = (r, win) => {
     let x = r.left + Math.min(r.width / 2, 200);
     let y = r.top + r.height / 2;
@@ -198,27 +197,47 @@ function titlePoint() {
     }
     return { x: Math.round(x), y: Math.round(y) };
   };
-  // 후보를 모두 훑어 눈에 보이는(크기 있는) 것 중 가장 위쪽 요소를 고른다
-  const cands = [...document.querySelectorAll(sel)];
-  let best = null;
-  for (const el of cands) {
+  const inToolbar = (el) => !!el.closest('[class*="toolbar"], [class*="Toolbar"], [role="toolbar"]');
+  const rectOf = (el) => {
     let r = el.getBoundingClientRect();
     if (r.width < 40 || r.height < 8) {
       const inner = el.querySelector('[contenteditable="true"], input, textarea');
       if (inner) r = inner.getBoundingClientRect();
     }
-    if (r.width >= 40 && r.height >= 8) {
-      if (!best || r.top < best.top) best = r;
-    }
+    return r;
+  };
+  const tag = (el) => (el.tagName + "." + ((typeof el.className === "string" ? el.className : "").trim().split(/\s+/)[0] || "")).slice(0, 24);
+
+  // 1순위: 진짜 제목 편집영역 (툴바 버튼 제외)
+  const strong = [
+    'input[placeholder*="제목"]',
+    'textarea[placeholder*="제목"]',
+    '[contenteditable="true"][data-placeholder*="제목"]',
+    '.se-documentTitle [contenteditable="true"]',
+    '.se-section-documentTitle [contenteditable="true"]',
+    '[class*="documentTitle"] [contenteditable="true"]',
+  ];
+  let el = null;
+  for (const s of strong) {
+    const found = [...document.querySelectorAll(s)].filter((e) => !inToolbar(e));
+    // 가장 넓은(=제목 입력줄) 것
+    found.sort((a, b) => rectOf(b).width - rectOf(a).width);
+    if (found[0]) { el = found[0]; break; }
   }
-  if (!best) {
-    if (!cands.length) return null;
-    try { cands[0].scrollIntoView({ block: "center" }); } catch (_) {}
-    best = cands[0].getBoundingClientRect();
-    if (best.width < 10 || best.height < 5) return { diag: "rect0" };
+  // 2순위: 제목 컨테이너 자체
+  if (!el) {
+    const conts = [...document.querySelectorAll('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')].filter((e) => !inToolbar(e));
+    conts.sort((a, b) => rectOf(b).width - rectOf(a).width);
+    el = conts[0] || null;
   }
-  const pt = toTop(best, window);
-  return pt || { diag: "환산실패" };
+  if (!el) return { diag: "제목요소없음" };
+  try { el.scrollIntoView({ block: "center" }); } catch (_) {}
+  const r = rectOf(el);
+  if (r.width < 20 || r.height < 5) return { diag: "rect0:" + tag(el) };
+  const pt = toTop(r, window);
+  if (!pt) return { diag: "환산실패" };
+  pt.tag = tag(el);
+  return pt;
 }
 
 // 인용구 박스의 '출처' 편집칸 좌표 (인용문과 같은 문장이 잘못 들어갔을 때 비우기용)
@@ -344,17 +363,18 @@ function quoteStyleOption() {
     (x.getAttribute("data-log") || "") +
     (x.getAttribute("aria-label") || "") +
     (x.getAttribute("title") || "");
-  // 드롭다운 '옵션'만 대상 (select-button 본체는 제외 — 그건 옵션이 아님)
   const els = [...document.querySelectorAll("button, [role='button'], li, a")].filter((x) => {
     const rr = x.getBoundingClientRect();
     if (!rr.width || !rr.height) return false;
-    const v = idv(x);
-    if (/select-button/i.test(v)) return false; // 드롭다운 여는 버튼 자체는 제외
-    return /se-toolbar-option-[\w-]*button/i.test(v) || (/quotation|인용/i.test(v) && /option|list|layer/i.test(v)) || /세로/.test((x.textContent || "").trim());
+    return /quotation|인용/i.test(idv(x)) || /세로/.test((x.textContent || "").trim());
   });
-  // 세로줄(line) 우선
-  let o = els.find((x) => /line|vertical|세로/i.test(idv(x) + (x.textContent || "")));
-  if (!o && els.length) o = els[0];
+  // 세로줄 우선 → 목록의 두 번째(보통 1번이 기본 따옴표) → 아무거나
+  let o = els.find((x) => /line|vertical/i.test(idv(x)) || /세로/.test(idv(x) + (x.textContent || "")));
+  if (!o) {
+    const opts = els.filter((x) => /option|list|layer/i.test(idv(x)) || x.tagName === "LI");
+    if (opts.length > 1) o = opts[1];
+    else if (opts.length === 1) o = opts[0];
+  }
   if (!o) return null;
   const pt = toTop(o, window);
   return pt ? { pt, id: idv(o).slice(0, 40), n: els.length } : null;
@@ -944,7 +964,7 @@ async function fillNaver(tabId, payload) {
               notes.push("title:" + (e && e.message ? e.message : e));
             }
           }
-          if (!titleOk) notes.push("title:클릭입력무반응(" + pt.x + "," + pt.y + ")");
+          if (!titleOk) notes.push("title:클릭입력무반응(" + pt.x + "," + pt.y + " " + (pt.tag || "") + ")");
         } else {
           const d = results.map((r) => r && r.diag).filter(Boolean).join("/");
           notes.push("title:좌표없음" + (d ? "(" + d + ")" : ""));
@@ -1008,30 +1028,35 @@ async function fillNaver(tabId, payload) {
           if (bp) {
             try {
               await execAll(tabId, focusBodyEnd);
-              await sleep(150);
-              // 1) 인용구 '선택 버튼'을 눌러 스타일 드롭다운을 연다
-              await clickAt(tabId, bp.btn);
-              await sleep(700);
-              // 2) 드롭다운에서 '세로줄(line)' 옵션을 눌러 그 스타일의 박스를 삽입
-              const opt = (await execAll(tabId, quoteStyleOption)).filter(Boolean)[0];
-              if (opt && opt.pt) {
-                await clickAt(tabId, opt.pt);
-                await sleep(800);
-                notes.push("인용스타일:" + opt.id);
-              } else {
-                notes.push("인용:옵션못찾음");
+              let opened = false;
+              if (bp.arrow) {
+                // ▾ 화살표 → 스타일 목록 → 세로줄
+                await clickAt(tabId, bp.arrow);
+                await sleep(600);
+                const opt = (await execAll(tabId, quoteStyleOption)).filter(Boolean)[0];
+                if (opt && opt.pt) {
+                  await clickAt(tabId, opt.pt);
+                  await sleep(600);
+                  opened = true;
+                  notes.push("인용스타일:" + opt.id);
+                }
               }
-              // 3) 새 박스가 생겼는지 확인하고, 그 박스 '안'에 문장을 타이핑
-              let after = (await execAll(tabId, quoteCount)).filter(Boolean)[0] || { n: 0, lastLen: -1 };
-              const boxMade = after.n > (before.n || 0);
-              let typedIn = false;
-              if (boxMade) {
-                typedIn = (await execAll(tabId, typeInLastQuote, [seg.text], notes, "quoteType")).some(Boolean);
-                after = (await execAll(tabId, quoteCount)).filter(Boolean)[0] || after;
+              if (!opened) {
+                // 화살표가 없으면 본 버튼 (마지막 사용 스타일로 삽입됨)
+                await clickAt(tabId, bp.btn);
+                await sleep(600);
+                const opt = (await execAll(tabId, quoteStyleOption)).filter(Boolean)[0];
+                if (opt && opt.pt) {
+                  await clickAt(tabId, opt.pt);
+                  await sleep(600);
+                }
               }
-              quoteApplied = boxMade && typedIn && after.lastLen > 0;
+              // 커서가 새 빈 박스 안에 있음 → 문장을 그 자리에 타이핑
+              const typedIn = (await execAll(tabId, typeHere, [seg.text], notes, "quoteType")).some(Boolean);
+              const after = (await execAll(tabId, quoteCount)).filter(Boolean)[0] || { n: 0, lastLen: -1 };
+              quoteApplied = typedIn && after.n > (before.n || 0) && after.lastLen > 0;
               if (quoteApplied) bodyTyped = true;
-              else notes.push("인용:박스" + (boxMade ? "생김" : "안생김") + " 안글자" + after.lastLen + (typedIn ? "" : " 타이핑실패"));
+              else notes.push("인용:박스" + (after.n > (before.n || 0) ? "생김" : "안생김") + " 안글자" + after.lastLen + (typedIn ? "" : " 타이핑실패"));
               // 출처칸에 같은 문장이 복제됐으면 클릭해서 비운다 (전체선택 후 삭제, trusted)
               if (quoteApplied) {
                 const cite = (await execAll(tabId, quoteCitePoint, [seg.text])).filter(Boolean)[0];
@@ -1091,10 +1116,21 @@ async function fillNaver(tabId, payload) {
       await sendEnter(tabId, attached);
     }
 
-    // 6.5) 지도(장소) 첨부 — 장소 버튼 → 학원명 검색 → 첫 결과 추가 (실험 기능)
+    // 6.5) 지도(장소) 첨부 — 설정에서 '지도 자동 첨부'를 켠 경우에만 (실험 기능)
+    //   실패하면 엉뚱한 기본 지도가 들어가지 않도록 Esc 로 창을 닫고 아무것도 넣지 않는다.
     const academyName = (payload.academy && payload.academy.name) || "더몬스터학원";
     let mapOk = false;
-    if (attached) {
+    let mapTried = false;
+    const pressEsc = async () => {
+      const k = { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 };
+      try {
+        await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...k });
+        await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...k });
+        await sleep(400);
+      } catch (_) {}
+    };
+    if (attached && payload.tryMap) {
+      mapTried = true;
       try {
         await say(tabId, "지도(장소) 첨부 중…");
         const mb = (await execAll(tabId, mapBtnPoint)).filter(Boolean)[0];
@@ -1123,12 +1159,20 @@ async function fillNaver(tabId, payload) {
               } else {
                 const d = cfs.map((c) => c && c.diag).filter(Boolean).join(" ");
                 notes.push("지도:확인버튼없음 " + d);
+                await pressEsc(); // 확인 못 찾으면 취소 (엉뚱한 지도 방지)
               }
-            } else notes.push("지도:검색결과없음");
-          } else notes.push("지도:검색창없음");
+            } else {
+              notes.push("지도:검색결과없음(" + academyName + ")");
+              await pressEsc(); // 결과 없으면 취소 — 기본 지도 삽입 방지
+            }
+          } else {
+            notes.push("지도:검색창없음");
+            await pressEsc();
+          }
         } else notes.push("지도:장소버튼없음");
       } catch (e) {
         notes.push("지도:" + (e && e.message ? e.message : e));
+        await pressEsc();
       }
     }
 
@@ -1160,13 +1204,17 @@ async function fillNaver(tabId, payload) {
       : "";
     const quoteNotes = notes.filter((n) => n.indexOf("인용:") === 0);
     const quoteNote = quoteNotes.length ? "인용구 박스 일부 실패(문장은 들어감) — " + quoteNotes.slice(0, 2).join(" | ") : "";
-    const mapNote = mapOk ? "지도 첨부됨 (위치 확인해 주세요)" : "지도 자동첨부 실패 — 장소 버튼에서 '" + academyName + "' 검색하면 됩니다";
+    const mapNote = !mapTried
+      ? ""
+      : mapOk
+        ? "\n📍 지도 첨부됨 (위치 확인해 주세요)"
+        : "\n📍 지도 자동첨부 실패(글은 그대로) — 장소 버튼에서 '" + academyName + "' 직접 검색하세요";
     const closeMsg = pub.mode === "none" ? "내용 확인 후 발행해 주세요." : (pubNote || "발행 처리 완료");
-    const hasIssue = (imgTotal > 0 && imgOk < imgTotal) || quoteNotes.length > 0 || (pub.mode !== "none" && !/완료|예약됨/.test(pubNote));
-    const diagLine = hasIssue || !mapOk ? "\n진단: " + notes.slice(0, 7).join(" | ") : "";
+    const hasIssue = (imgTotal > 0 && imgOk < imgTotal) || quoteNotes.length > 0 || (pub.mode !== "none" && !/완료|예약됨/.test(pubNote)) || (mapTried && !mapOk);
+    const diagLine = hasIssue ? "\n진단: " + notes.slice(0, 7).join(" | ") : "";
     await say(
       tabId,
-      `✅ ${titleNote}${imgNote ? "\n🖼️ " + imgNote : ""}${quoteNote ? "\n💬 " + quoteNote : ""}\n📍 ${mapNote}\n🚀 ${closeMsg}${diagLine}`,
+      `✅ ${titleNote}${imgNote ? "\n🖼️ " + imgNote : ""}${quoteNote ? "\n💬 " + quoteNote : ""}${mapNote}\n🚀 ${closeMsg}${diagLine}`,
       hasIssue,
       50000
     );

@@ -518,6 +518,7 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
   } catch (_) {}
   // 지도 검색·톡톡에 쓸 학원 정보
   payload.academy = { name: currentProfile.name, talktalk: currentProfile.talktalk || "" };
+  payload.tryMap = document.getElementById("trymap").checked;
   // 발행 방식
   const pubmode = document.getElementById("pubmode").value;
   payload.publish = { mode: pubmode, when: document.getElementById("pubwhen").value || "" };
