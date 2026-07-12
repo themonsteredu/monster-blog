@@ -98,6 +98,16 @@ function checkTitle(prefix) {
   return v.indexOf(prefix) !== -1;
 }
 
+// 이 프레임에 제목칸이 있으면 그 내용이 비었는지 반환. 제목칸이 없으면 null(판단 불가)
+function titleIsEmpty() {
+  const sel =
+    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"], .se-documentTitle [contenteditable="true"]';
+  const t = document.querySelector(sel);
+  if (!t) return null;
+  const v = (typeof t.value === "string" ? t.value : t.textContent || "").trim();
+  return v.length === 0;
+}
+
 function typeTitleFallback(title) {
   const sel =
     'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
@@ -967,27 +977,31 @@ async function fillNaver(tabId, payload) {
         const results = (await execAll(tabId, titlePoint)).filter(Boolean);
         const pt = results.find((r) => r && typeof r.x === "number");
         if (pt) {
-          for (let tryN = 0; tryN < 2 && !titleOk; tryN++) {
-            try {
-              await clickAt(tabId, pt);
-              await sleep(300);
-              // 기존 내용/자동 채워진 것 비우기 (Ctrl+A → Delete)
+          // ★ 딱 한 번만 넣는다 (재시도하면 제목에 글이 여러 번 겹쳐 써짐)
+          try {
+            // 제목이 이미 비어 있는지 확인 — 비어 있으면 굳이 지우지 않는다(잘못된 포커스에서 Ctrl+A+Delete 위험 방지)
+            const emptyArr = (await execAll(tabId, titleIsEmpty)).filter((v) => v !== null);
+            const titleEmpty = emptyArr.length ? emptyArr.some(Boolean) : true;
+            await clickAt(tabId, pt);
+            await sleep(300);
+            if (!titleEmpty) {
+              // 제목칸에 뭔가 있을 때만 비우기 (제목 프레임에 포커스가 확실할 때)
               const a = { modifiers: 2, key: "a", code: "KeyA", windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 };
               await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...a });
               await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...a });
-              await sleep(120);
+              await sleep(100);
               const del = { key: "Delete", code: "Delete", windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 };
               await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...del });
               await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...del });
-              await sleep(120);
-              await cdp(tabId, "Input.insertText", { text: payload.title });
-              await sleep(350);
-              titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
-            } catch (e) {
-              notes.push("title:" + (e && e.message ? e.message : e));
+              await sleep(100);
             }
+            await cdp(tabId, "Input.insertText", { text: payload.title });
+            await sleep(350);
+            titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
+          } catch (e) {
+            notes.push("title:" + (e && e.message ? e.message : e));
           }
-          if (!titleOk) notes.push("title:클릭입력무반응(" + pt.x + "," + pt.y + " " + (pt.tag || "") + ")");
+          if (!titleOk) notes.push("title:확인안됨(" + pt.x + "," + pt.y + " " + (pt.tag || "") + ")");
         } else {
           const d = results.map((r) => r && r.diag).filter(Boolean).join("/");
           notes.push("title:좌표없음" + (d ? "(" + d + ")" : ""));
@@ -1075,11 +1089,13 @@ async function fillNaver(tabId, payload) {
                 }
               }
               // 커서가 새 빈 박스 안에 있음 → 문장을 그 자리에 타이핑
+              // ★ 타이핑에 성공했으면(어디든 한 번 들어갔으면) 성공으로 간주 → 아래 예비 재입력을 막아 '두 번 써짐' 방지
               const typedIn = (await execAll(tabId, typeHere, [seg.text], notes, "quoteType")).some(Boolean);
               const after = (await execAll(tabId, quoteCount)).filter(Boolean)[0] || { n: 0, lastLen: -1 };
-              quoteApplied = typedIn && after.n > (before.n || 0) && after.lastLen > 0;
-              if (quoteApplied) bodyTyped = true;
-              else notes.push("인용:박스" + (after.n > (before.n || 0) ? "생김" : "안생김") + " 안글자" + after.lastLen + (typedIn ? "" : " 타이핑실패"));
+              const boxMade = after.n > (before.n || 0);
+              quoteApplied = typedIn; // 텍스트가 들어갔으면 재입력 금지
+              if (typedIn) bodyTyped = true;
+              if (!boxMade) notes.push("인용:박스안생김(문장은 들어감)");
               // 출처칸에 같은 문장이 복제됐으면 클릭해서 비운다 (전체선택 후 삭제, trusted)
               if (quoteApplied) {
                 const cite = (await execAll(tabId, quoteCitePoint, [seg.text])).filter(Boolean)[0];

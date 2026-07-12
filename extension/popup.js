@@ -539,6 +539,52 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
   );
 });
 
+// ---------- 화면 진단 (실제 네이버 DOM 구조를 뽑아 복사) ----------
+document.getElementById("diag").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !/naver\.com/.test(tab.url || "")) {
+    setStatus("네이버 글쓰기 화면을 연 상태에서 눌러주세요.", true);
+    return;
+  }
+  setStatus("화면 구조를 읽는 중…");
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      func: dumpEditor,
+    });
+    const text = res.map((r) => r && r.result).filter(Boolean).join("\n---\n");
+    await navigator.clipboard.writeText(text);
+    setStatus("진단을 복사했습니다. 대화창에 붙여넣기(Ctrl+V) 해서 보내주세요.\n\n" + text.slice(0, 1200));
+  } catch (e) {
+    setStatus("진단 실패: " + (e && e.message ? e.message : e), true);
+  }
+});
+
+// 각 프레임에서 실행 — 제목/본문/인용/장소 관련 요소 구조를 요약
+function dumpEditor() {
+  const tc = (e) =>
+    e ? "<" + e.tagName + " ." + ((typeof e.className === "string" ? e.className : "").trim().split(/\s+/).slice(0, 2).join(".")) +
+      (e.getAttribute && e.getAttribute("data-placeholder") ? " ph=" + e.getAttribute("data-placeholder") : "") +
+      (e.getAttribute && e.getAttribute("aria-label") ? " al=" + e.getAttribute("aria-label") : "") + ">" : "null";
+  const out = [];
+  out.push("FRAME top=" + (window === window.top ? 1 : 0) + " url=" + location.href.slice(0, 60));
+  const eds = [...document.querySelectorAll('[contenteditable="true"]')];
+  out.push("editable(" + eds.length + "): " + eds.slice(0, 4).map(tc).join(" "));
+  // 제목 후보
+  const titleCands = [...document.querySelectorAll('input[placeholder*="제목"], textarea[placeholder*="제목"], [data-placeholder*="제목"], [aria-label*="제목"], [class*="documentTitle"]')];
+  out.push("title후보(" + titleCands.length + "): " + titleCands.slice(0, 4).map(tc).join(" "));
+  // 인용구 버튼 후보
+  const qbtn = [...document.querySelectorAll("button,[role=button]")].filter((b) => /인용|quot/i.test((b.getAttribute("aria-label") || "") + (b.getAttribute("title") || "") + (b.className || "") + b.textContent));
+  out.push("인용버튼(" + qbtn.length + "): " + qbtn.slice(0, 4).map(tc).join(" "));
+  // 인용 스타일 옵션(드롭다운 열려있을 때만)
+  const qopt = [...document.querySelectorAll('[class*="toolbar-option"], [class*="quotation"]')].filter((e) => e.getBoundingClientRect().width > 0);
+  out.push("인용옵션(" + qopt.length + "): " + qopt.slice(0, 6).map((e) => (typeof e.className === "string" ? e.className : "").slice(0, 40)).join(" | "));
+  // 장소/지도 관련
+  const mapBtn = [...document.querySelectorAll("button")].filter((b) => /장소|지도|map|place/i.test((b.getAttribute("aria-label") || "") + (b.className || "") + b.textContent));
+  out.push("장소버튼(" + mapBtn.length + "): " + mapBtn.slice(0, 3).map(tc).join(" "));
+  return out.join("\n");
+}
+
 // ---------- 보조 ----------
 function setStatus(msg, isError) {
   const el = document.getElementById("status");
