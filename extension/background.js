@@ -519,14 +519,37 @@ function mapResultPoint(q) {
     }
     return { x: Math.round(x), y: Math.round(y) };
   };
-  const items = [...document.querySelectorAll("li")].filter((x) => {
-    const rr = x.getBoundingClientRect();
-    return rr.width > 0 && rr.height > 0 && (x.textContent || "").indexOf(q) !== -1;
-  });
-  const it = items[0];
-  if (!it) return null;
-  const addBtn = [...it.querySelectorAll("button")].find((b) => /추가|선택/.test((b.textContent || "").trim()));
-  return toTop(addBtn || it, window);
+  const vis = (el) => {
+    const rr = el.getBoundingClientRect();
+    return rr.width > 4 && rr.height > 4;
+  };
+  // 결과 항목 후보: li / 결과·항목·장소 클래스 / 검색어를 포함한 클릭 가능한 컨테이너
+  let items = [...document.querySelectorAll('li, [class*="item"], [class*="result"], [class*="place"], [class*="search"] a, [class*="list"] > *')].filter(
+    (x) => vis(x) && (x.textContent || "").indexOf(q) !== -1
+  );
+  // 너무 큰(패널 전체) 컨테이너는 제외하고, 실제 한 줄짜리 결과만
+  items = items.filter((x) => x.getBoundingClientRect().height < 160);
+  // 가장 위쪽(첫 결과)
+  items.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+  let it = items[0];
+  if (!it) {
+    // 검색어 매칭 실패 시: 결과 목록의 첫 항목이라도 (search 후 첫 결과가 보통 정답)
+    const anyList = [...document.querySelectorAll('li, [class*="item"]')].filter(vis).filter((x) => {
+      const h = x.getBoundingClientRect().height;
+      return h > 24 && h < 160;
+    });
+    anyList.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+    it = anyList[0];
+    if (!it) return { diag: "결과항목없음" };
+  }
+  // 항목 안의 '추가/선택/등록' 버튼 우선, 없으면 항목의 제목 링크, 없으면 항목 자체
+  const addBtn = [...it.querySelectorAll('button, a, [role="button"]')].find((b) =>
+    /추가|선택|등록|확인/.test((b.textContent || "").trim())
+  );
+  const titleLink = it.querySelector('a, [class*="title"], strong, [class*="name"]');
+  const target = addBtn || titleLink || it;
+  const pt = toTop(target, window);
+  return pt || { diag: "결과좌표없음" };
 }
 
 function mapConfirmPoint() {
