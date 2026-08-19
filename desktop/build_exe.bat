@@ -21,6 +21,8 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+rem Fix for Microsoft Store Python: pywin32-ctypes can be broken there ("Could not import pywintypes")
+python -m pip install --upgrade --force-reinstall pywin32-ctypes
 
 echo [3/3] Building exe... this takes a few minutes, please wait...
 rem --collect-all selenium: selenium loads submodules lazily, so PyInstaller misses them without this
