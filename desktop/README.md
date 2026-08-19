@@ -22,7 +22,7 @@
 ## 개발 컴퓨터에서 실행 (포장 전 테스트)
 
 ```bash
-pip install selenium anthropic pillow
+pip install selenium anthropic pillow customtkinter
 python desktop/main.py
 ```
 

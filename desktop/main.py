@@ -2,8 +2,9 @@
 #
 # 확장프로그램 없이 쓰는 버전: 카톡처럼 프로그램을 켜서 네이버 아이디로 로그인하고,
 # 주제를 넣으면 글을 만들어 네이버에 자동 입력 → 임시저장/바로발행/예약발행까지 한다.
+# 화면은 customtkinter(모던 UI) — 전체가 스크롤되므로 작은 화면에서도 잘리지 않는다.
 #
-# 실행(개발): python desktop/main.py
+# 실행(개발): pip install customtkinter selenium anthropic pillow → python desktop/main.py
 # 배포: build_exe.bat 로 .exe 를 만들고, installer.iss(Inno Setup)로 설치파일을 만든다.
 
 import json
@@ -14,18 +15,26 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
+
+import customtkinter as ctk
 
 import banner
 import generate
 import robot
 
-APP_NAME = "더몬스터학원 블로그 자동화"
-VERSION = "2.0.0"
+APP_NAME = "몬스터 블로그"
+VERSION = "2.1.0"
 
 APP_DIR = Path.home() / ".monster_blog"
 SETTINGS_FILE = APP_DIR / "settings.json"
 OUT_DIR = APP_DIR / "output"
+
+# 브랜드 색 (네이버 그린 계열)
+GREEN = "#03c75a"
+GREEN_DARK = "#02a94d"
+INK = "#1a1a1a"
+SUB = "#6b7280"
 
 DEFAULT_SETTINGS = {
     "anthropic_api_key": "",
@@ -52,133 +61,173 @@ def save_settings(s):
     SETTINGS_FILE.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-class App(tk.Tk):
+class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_NAME} v{VERSION}")
-        self.geometry("760x860")
-        self.minsize(680, 700)
+        ctk.set_appearance_mode("light")
+        self.title(f"{APP_NAME}  v{VERSION}")
+        self.geometry("820x860")
+        self.minsize(700, 600)
+        self.configure(fg_color="#eef1f4")
         self.settings = load_settings()
         self.photo_paths = []
         self.logq = queue.Queue()
         self.busy = False
+
+        # 폰트 (윈도우 한글은 맑은 고딕이 제일 깔끔)
+        self.f_title = ctk.CTkFont(family="Malgun Gothic", size=21, weight="bold")
+        self.f_section = ctk.CTkFont(family="Malgun Gothic", size=14, weight="bold")
+        self.f_body = ctk.CTkFont(family="Malgun Gothic", size=13)
+        self.f_small = ctk.CTkFont(family="Malgun Gothic", size=11)
+        self.f_btn = ctk.CTkFont(family="Malgun Gothic", size=13, weight="bold")
+
         self._build_ui()
         self.after(150, self._drain_log)
         if not self.settings["anthropic_api_key"]:
-            self.log("⚙️ 먼저 [설정]에서 Claude API 키를 저장하세요.")
+            self.log("⚙️ 먼저 오른쪽 위 [설정]에서 Claude API 키를 저장하세요.")
+
+    # ---------- 공통 위젯 ----------
+
+    def _card(self, parent, title, subtitle=""):
+        f = ctk.CTkFrame(parent, corner_radius=14, fg_color="#ffffff")
+        f.pack(fill="x", padx=4, pady=6)
+        head = ctk.CTkFrame(f, fg_color="transparent")
+        head.pack(fill="x", padx=16, pady=(12, 0))
+        ctk.CTkLabel(head, text=title, font=self.f_section, text_color=INK).pack(side="left")
+        if subtitle:
+            ctk.CTkLabel(head, text=subtitle, font=self.f_small, text_color=SUB).pack(side="left", padx=10)
+        return f
+
+    def _entry(self, parent, placeholder="", width=None, show=None):
+        kw = dict(font=self.f_body, height=34, corner_radius=8,
+                  border_color="#d7dce3", placeholder_text=placeholder)
+        if width:
+            kw["width"] = width
+        if show:
+            kw["show"] = show
+        return ctk.CTkEntry(parent, **kw)
 
     # ---------- 화면 구성 ----------
 
     def _build_ui(self):
-        pad = {"padx": 10, "pady": 4}
+        # 상단 헤더 (고정)
+        header = ctk.CTkFrame(self, corner_radius=0, fg_color="#ffffff", height=64)
+        header.pack(fill="x")
+        ctk.CTkLabel(header, text="📝", font=ctk.CTkFont(size=24)).pack(side="left", padx=(18, 6), pady=14)
+        ctk.CTkLabel(header, text=APP_NAME, font=self.f_title, text_color=INK).pack(side="left")
+        ctk.CTkLabel(header, text=f"v{VERSION}", font=self.f_small, text_color=SUB).pack(side="left", padx=8)
+        ctk.CTkButton(header, text="⚙️ 설정", width=90, height=34, corner_radius=8,
+                      font=self.f_btn, fg_color="#f0f2f5", hover_color="#e3e6ea",
+                      text_color=INK, command=self.on_settings).pack(side="right", padx=16)
 
-        # 상단: 로그인 (카톡처럼 아이디/비번 → 로그인)
-        lf = ttk.LabelFrame(self, text=" 🔑 네이버 로그인 ")
-        lf.pack(fill="x", **pad)
-        row = ttk.Frame(lf); row.pack(fill="x", padx=8, pady=6)
-        ttk.Label(row, text="아이디").pack(side="left")
-        self.e_id = ttk.Entry(row, width=18)
-        self.e_id.pack(side="left", padx=(4, 10))
-        self.e_id.insert(0, self.settings["naver_id"])
-        ttk.Label(row, text="비밀번호").pack(side="left")
-        self.e_pw = ttk.Entry(row, width=18, show="*")
-        self.e_pw.pack(side="left", padx=(4, 10))
-        self.e_pw.insert(0, self.settings["naver_pw"])
-        self.btn_login = ttk.Button(row, text="로그인", command=self.on_login)
+        # 본문 전체 스크롤 (작은 화면에서도 안 잘림)
+        body = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=12, pady=8)
+
+        # ── 1. 네이버 로그인 ──
+        lf = self._card(body, "🔑 네이버 로그인",
+                        "처음 한 번만 캡차가 뜰 수 있어요 — 크롬 창에서 풀면 다음부터는 자동")
+        row = ctk.CTkFrame(lf, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=(8, 14))
+        self.e_id = self._entry(row, "네이버 아이디", width=180)
+        self.e_id.pack(side="left")
+        if self.settings["naver_id"]:
+            self.e_id.insert(0, self.settings["naver_id"])
+        self.e_pw = self._entry(row, "비밀번호", width=180, show="•")
+        self.e_pw.pack(side="left", padx=8)
+        if self.settings["naver_pw"]:
+            self.e_pw.insert(0, self.settings["naver_pw"])
+        self.btn_login = ctk.CTkButton(row, text="로그인", width=100, height=34, corner_radius=8,
+                                       font=self.f_btn, fg_color=GREEN, hover_color=GREEN_DARK,
+                                       command=self.on_login)
         self.btn_login.pack(side="left", padx=4)
-        self.lbl_login = ttk.Label(row, text="", foreground="#03794a")
-        self.lbl_login.pack(side="left", padx=8)
-        ttk.Label(lf, text="※ 처음 한 번은 캡차가 뜰 수 있어요 — 그때만 열린 크롬 창에서 직접 로그인하면, 다음부터는 자동입니다.",
-                  foreground="#777").pack(anchor="w", padx=8, pady=(0, 6))
+        self.lbl_login = ctk.CTkLabel(row, text="", font=self.f_body, text_color=GREEN_DARK)
+        self.lbl_login.pack(side="left", padx=10)
 
-        # 가운데: 글 만들기
-        gf = ttk.LabelFrame(self, text=" ✍️ 글 만들기 ")
-        gf.pack(fill="x", **pad)
-        r1 = ttk.Frame(gf); r1.pack(fill="x", padx=8, pady=3)
-        ttk.Label(r1, text="글 종류").pack(side="left")
-        self.cb_type = ttk.Combobox(r1, values=["교육정보", "학원·과목 특징", "특강 안내"],
-                                    state="readonly", width=14)
-        self.cb_type.current(0)
-        self.cb_type.pack(side="left", padx=(4, 14))
-        self.btn_photos = ttk.Button(r1, text="📷 사진 선택…", command=self.on_pick_photos)
-        self.btn_photos.pack(side="left")
-        self.lbl_photos = ttk.Label(r1, text="사진 없음 (없으면 인용구 카드 이미지로 대체)")
-        self.lbl_photos.pack(side="left", padx=6)
+        # ── 2. 글 만들기 ──
+        gf = self._card(body, "✍️ 글 만들기")
+        r1 = ctk.CTkFrame(gf, fg_color="transparent")
+        r1.pack(fill="x", padx=16, pady=(8, 4))
+        self.cb_type = ctk.CTkComboBox(r1, values=["교육정보", "학원·과목 특징", "특강 안내"],
+                                       state="readonly", width=150, height=34, corner_radius=8,
+                                       font=self.f_body, dropdown_font=self.f_body,
+                                       button_color=GREEN, button_hover_color=GREEN_DARK)
+        self.cb_type.set("교육정보")
+        self.cb_type.pack(side="left")
+        ctk.CTkButton(r1, text="📷 사진 선택", width=110, height=34, corner_radius=8,
+                      font=self.f_body, fg_color="#f0f2f5", hover_color="#e3e6ea",
+                      text_color=INK, command=self.on_pick_photos).pack(side="left", padx=8)
+        self.lbl_photos = ctk.CTkLabel(r1, text="사진 없음 — 없으면 인용구 카드 이미지로 대체",
+                                       font=self.f_small, text_color=SUB)
+        self.lbl_photos.pack(side="left", padx=4)
 
-        r2 = ttk.Frame(gf); r2.pack(fill="x", padx=8, pady=3)
-        ttk.Label(r2, text="주제").pack(side="left")
-        self.e_topic = ttk.Entry(r2)
-        self.e_topic.pack(side="left", fill="x", expand=True, padx=4)
+        self.e_topic = self._entry(gf, "주제  (예: 예비 고1 지금 해야 할 일)")
+        self.e_topic.pack(fill="x", padx=16, pady=4)
+        self.e_keyword = self._entry(gf, "핵심 검색 키워드  (예: 광주 동구 수학학원)")
+        self.e_keyword.pack(fill="x", padx=16, pady=4)
+        self.t_core = ctk.CTkTextbox(gf, height=64, corner_radius=8, font=self.f_body,
+                                     border_width=1, border_color="#d7dce3")
+        self.t_core.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(gf, text="↑ 핵심 내용 (강조하고 싶은 것들을 자유롭게)",
+                     font=self.f_small, text_color=SUB).pack(anchor="w", padx=18)
+        self.btn_gen = ctk.CTkButton(gf, text="✨ 글 생성", width=140, height=38, corner_radius=8,
+                                     font=self.f_btn, fg_color=GREEN, hover_color=GREEN_DARK,
+                                     command=self.on_generate)
+        self.btn_gen.pack(anchor="w", padx=16, pady=(6, 14))
 
-        r3 = ttk.Frame(gf); r3.pack(fill="x", padx=8, pady=3)
-        ttk.Label(r3, text="키워드").pack(side="left")
-        self.e_keyword = ttk.Entry(r3)
-        self.e_keyword.pack(side="left", fill="x", expand=True, padx=4)
+        # ── 3. 결과 ──
+        rf = self._card(body, "📄 결과", "제목·본문은 직접 고칠 수 있어요")
+        self.e_title = self._entry(rf, "제목 (글을 생성하면 여기 채워집니다)")
+        self.e_title.pack(fill="x", padx=16, pady=(8, 4))
+        self.t_body = ctk.CTkTextbox(rf, height=240, corner_radius=8, font=self.f_body,
+                                     border_width=1, border_color="#d7dce3", wrap="word")
+        self.t_body.pack(fill="x", padx=16, pady=(0, 14))
 
-        ttk.Label(gf, text="핵심 내용").pack(anchor="w", padx=8)
-        self.t_core = tk.Text(gf, height=3)
-        self.t_core.pack(fill="x", padx=8, pady=(0, 4))
-
-        r4 = ttk.Frame(gf); r4.pack(fill="x", padx=8, pady=4)
-        self.btn_gen = ttk.Button(r4, text="✨ 글 생성", command=self.on_generate)
-        self.btn_gen.pack(side="left")
-        self.btn_settings = ttk.Button(r4, text="⚙️ 설정", command=self.on_settings)
-        self.btn_settings.pack(side="right")
-
-        # 결과 (수정 가능)
-        rf = ttk.LabelFrame(self, text=" 📄 결과 (제목·본문은 직접 고칠 수 있어요) ")
-        rf.pack(fill="both", expand=True, **pad)
-        rr = ttk.Frame(rf); rr.pack(fill="x", padx=8, pady=3)
-        ttk.Label(rr, text="제목").pack(side="left")
-        self.e_title = ttk.Entry(rr)
-        self.e_title.pack(side="left", fill="x", expand=True, padx=4)
-        self.t_body = tk.Text(rf, height=12)
-        self.t_body.pack(fill="both", expand=True, padx=8, pady=(0, 6))
-
-        # 발행 방식 + 올리기
-        pf = ttk.LabelFrame(self, text=" 🚀 네이버에 올리기 ")
-        pf.pack(fill="x", **pad)
-        pr = ttk.Frame(pf); pr.pack(fill="x", padx=8, pady=4)
+        # ── 4. 네이버에 올리기 ──
+        pf = self._card(body, "🚀 네이버에 올리기",
+                        "예약 발행은 네이버 서버가 처리 — 그 시간에 컴퓨터를 꺼도 됩니다")
+        pr = ctk.CTkFrame(pf, fg_color="transparent")
+        pr.pack(fill="x", padx=16, pady=(8, 4))
         self.pub_mode = tk.StringVar(value="draft")
-        ttk.Radiobutton(pr, text="임시저장 (안전)", variable=self.pub_mode,
-                        value="draft", command=self._toggle_when).pack(side="left")
-        ttk.Radiobutton(pr, text="바로 발행", variable=self.pub_mode,
-                        value="now", command=self._toggle_when).pack(side="left", padx=8)
-        ttk.Radiobutton(pr, text="예약 발행", variable=self.pub_mode,
-                        value="reserve", command=self._toggle_when).pack(side="left")
-        self.when_frame = ttk.Frame(pr)
+        for val, txt in (("draft", "임시저장 (안전)"), ("now", "바로 발행"), ("reserve", "예약 발행")):
+            ctk.CTkRadioButton(pr, text=txt, variable=self.pub_mode, value=val,
+                               font=self.f_body, fg_color=GREEN, hover_color=GREEN_DARK,
+                               command=self._toggle_when).pack(side="left", padx=(0, 14))
+        self.when_frame = ctk.CTkFrame(pf, fg_color="transparent")
         tomorrow = datetime.now() + timedelta(days=1)
-        ttk.Label(self.when_frame, text="날짜").pack(side="left", padx=(12, 2))
-        self.e_date = ttk.Entry(self.when_frame, width=11)
+        ctk.CTkLabel(self.when_frame, text="날짜", font=self.f_body, text_color=SUB).pack(side="left")
+        self.e_date = self._entry(self.when_frame, "", width=110)
         self.e_date.insert(0, tomorrow.strftime("%Y-%m-%d"))
-        self.e_date.pack(side="left")
-        ttk.Label(self.when_frame, text="시").pack(side="left", padx=(8, 2))
-        self.cb_hour = ttk.Combobox(self.when_frame, values=[f"{h:02d}" for h in range(24)],
-                                    state="readonly", width=4)
+        self.e_date.pack(side="left", padx=(4, 10))
+        ctk.CTkLabel(self.when_frame, text="시", font=self.f_body, text_color=SUB).pack(side="left")
+        self.cb_hour = ctk.CTkComboBox(self.when_frame, values=[f"{h:02d}" for h in range(24)],
+                                       state="readonly", width=70, height=34, font=self.f_body,
+                                       button_color=GREEN, button_hover_color=GREEN_DARK)
         self.cb_hour.set("10")
-        self.cb_hour.pack(side="left")
-        ttk.Label(self.when_frame, text="분").pack(side="left", padx=(8, 2))
-        self.cb_min = ttk.Combobox(self.when_frame, values=[f"{m:02d}" for m in range(0, 60, 10)],
-                                   state="readonly", width=4)
+        self.cb_hour.pack(side="left", padx=(4, 10))
+        ctk.CTkLabel(self.when_frame, text="분", font=self.f_body, text_color=SUB).pack(side="left")
+        self.cb_min = ctk.CTkComboBox(self.when_frame, values=[f"{m:02d}" for m in range(0, 60, 10)],
+                                      state="readonly", width=70, height=34, font=self.f_body,
+                                      button_color=GREEN, button_hover_color=GREEN_DARK)
         self.cb_min.set("00")
-        self.cb_min.pack(side="left")
+        self.cb_min.pack(side="left", padx=4)
+        self.btn_post = ctk.CTkButton(pf, text="🚀 네이버에 올리기", height=44, corner_radius=10,
+                                      font=ctk.CTkFont(family="Malgun Gothic", size=15, weight="bold"),
+                                      fg_color=GREEN, hover_color=GREEN_DARK, command=self.on_post)
+        self.btn_post.pack(fill="x", padx=16, pady=(8, 14))
 
-        pr2 = ttk.Frame(pf); pr2.pack(fill="x", padx=8, pady=(0, 6))
-        self.btn_post = ttk.Button(pr2, text="🚀 네이버에 올리기", command=self.on_post)
-        self.btn_post.pack(side="left")
-        ttk.Label(pr2, text="예약 발행은 네이버 서버가 처리 — 그 시간에 컴퓨터를 꺼도 됩니다.",
-                  foreground="#777").pack(side="left", padx=10)
-
-        # 하단: 로그
-        logf = ttk.LabelFrame(self, text=" 진행 상황 ")
-        logf.pack(fill="both", **pad)
-        self.t_log = tk.Text(logf, height=7, state="disabled", background="#f6f6f6")
-        self.t_log.pack(fill="both", expand=True, padx=8, pady=6)
+        # ── 5. 진행 상황 ──
+        logf = self._card(body, "📡 진행 상황")
+        self.t_log = ctk.CTkTextbox(logf, height=120, corner_radius=8,
+                                    font=ctk.CTkFont(family="Malgun Gothic", size=12),
+                                    fg_color="#f6f8fa", text_color="#374151", wrap="word")
+        self.t_log.pack(fill="x", padx=16, pady=(6, 14))
+        self.t_log.configure(state="disabled")
         self._toggle_when()
 
     def _toggle_when(self):
         if self.pub_mode.get() == "reserve":
-            self.when_frame.pack(side="left")
+            self.when_frame.pack(fill="x", padx=16, pady=4, before=self.btn_post)
         else:
             self.when_frame.pack_forget()
 
@@ -233,7 +282,7 @@ class App(tk.Tk):
             # Tk 위젯은 메인 스레드에서만 만져야 안전하다
             self.after(0, lambda: self.lbl_login.configure(
                 text="✓ 로그인됨" if ok else "로그인 실패",
-                foreground="#03794a" if ok else "#c62828"))
+                text_color=GREEN_DARK if ok else "#dc2626"))
         self._run_bg(work)
 
     def on_pick_photos(self):
@@ -242,7 +291,9 @@ class App(tk.Tk):
             filetypes=[("사진", "*.png *.jpg *.jpeg"), ("모든 파일", "*.*")])
         self.photo_paths = list(paths)
         n = len(self.photo_paths)
-        self.lbl_photos.configure(text=f"사진 {n}장 선택됨" if n else "사진 없음 (없으면 인용구 카드 이미지로 대체)")
+        self.lbl_photos.configure(
+            text=f"사진 {n}장 선택됨 ✓" if n else "사진 없음 — 없으면 인용구 카드 이미지로 대체",
+            text_color=GREEN_DARK if n else SUB)
 
     def on_generate(self):
         api_key = self.settings["anthropic_api_key"]
@@ -337,40 +388,61 @@ class App(tk.Tk):
     # ---------- 설정 창 ----------
 
     def on_settings(self):
-        win = tk.Toplevel(self)
+        win = ctk.CTkToplevel(self)
         win.title("설정")
-        win.geometry("560x640")
+        win.geometry("600x720")
         win.transient(self)
+        win.configure(fg_color="#eef1f4")
+        win.after(200, win.lift)  # 창이 뒤로 숨는 것 방지
 
-        frm = ttk.Frame(win); frm.pack(fill="both", expand=True, padx=12, pady=10)
-        ttk.Label(frm, text="Claude(앤트로픽) API 키 — 글 생성").pack(anchor="w")
-        e_key = ttk.Entry(frm, show="*")
-        e_key.pack(fill="x", pady=(0, 8))
-        e_key.insert(0, self.settings["anthropic_api_key"])
+        scroll = ctk.CTkScrollableFrame(win, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=10, pady=10)
 
-        ttk.Label(frm, text="🏫 우리 학원 정보 (비워두면 더몬스터학원 기본값)").pack(anchor="w", pady=(4, 2))
+        c1 = ctk.CTkFrame(scroll, corner_radius=14, fg_color="#ffffff")
+        c1.pack(fill="x", pady=6)
+        ctk.CTkLabel(c1, text="🔑 Claude(앤트로픽) API 키 — 글 생성",
+                     font=self.f_section, text_color=INK).pack(anchor="w", padx=16, pady=(12, 4))
+        e_key = self._entry(c1, "sk-ant-…", show="•")
+        e_key.pack(fill="x", padx=16, pady=(0, 14))
+        if self.settings["anthropic_api_key"]:
+            e_key.insert(0, self.settings["anthropic_api_key"])
+
+        c2 = ctk.CTkFrame(scroll, corner_radius=14, fg_color="#ffffff")
+        c2.pack(fill="x", pady=6)
+        ctk.CTkLabel(c2, text="🏫 우리 학원 정보", font=self.f_section, text_color=INK).pack(anchor="w", padx=16, pady=(12, 0))
+        ctk.CTkLabel(c2, text="비워두면 더몬스터학원 기본값이 사용됩니다. 글·배너·지도에 반영돼요.",
+                     font=self.f_small, text_color=SUB).pack(anchor="w", padx=16, pady=(0, 6))
         labels = [("name", "학원명"), ("tagline", "한 줄 소개"), ("phone", "전화"),
                   ("sms", "문자"), ("kakao", "카카오톡 채널 주소"), ("talktalk", "네이버 톡톡 주소"),
                   ("address", "주소"), ("hours", "운영시간"), ("region", "지역 키워드(쉼표)"),
                   ("hashtags", "해시태그(쉼표)")]
         entries = {}
-        grid = ttk.Frame(frm); grid.pack(fill="x")
+        grid = ctk.CTkFrame(c2, fg_color="transparent")
+        grid.pack(fill="x", padx=16, pady=(0, 14))
         prof = self.settings.get("profile") or {}
         for i, (k, lab) in enumerate(labels):
-            ttk.Label(grid, text=lab, width=16).grid(row=i, column=0, sticky="w", pady=1)
-            e = ttk.Entry(grid)
-            e.grid(row=i, column=1, sticky="ew", pady=1)
-            e.insert(0, prof.get(k, ""))
+            ctk.CTkLabel(grid, text=lab, width=140, anchor="w", font=self.f_body,
+                         text_color=INK).grid(row=i, column=0, sticky="w", pady=3)
+            e = self._entry(grid)
+            e.grid(row=i, column=1, sticky="ew", pady=3)
+            if prof.get(k, ""):
+                e.insert(0, prof.get(k, ""))
             entries[k] = e
         grid.columnconfigure(1, weight=1)
 
+        c3 = ctk.CTkFrame(scroll, corner_radius=14, fg_color="#ffffff")
+        c3.pack(fill="x", pady=6)
         v_map = tk.BooleanVar(value=bool(self.settings.get("try_map")))
-        ttk.Checkbutton(frm, text="글 끝에 지도(장소) 자동 첨부 — 실험 기능",
-                        variable=v_map).pack(anchor="w", pady=6)
+        ctk.CTkCheckBox(c3, text="글 끝에 지도(장소) 자동 첨부 — 실험 기능", variable=v_map,
+                        font=self.f_body, fg_color=GREEN, hover_color=GREEN_DARK).pack(anchor="w", padx=16, pady=12)
 
-        ttk.Label(frm, text="전용 틀 직접 수정 (비워두면 학원 정보로 자동 생성 — 웬만하면 비워두세요)").pack(anchor="w")
-        t_tpl = tk.Text(frm, height=8)
-        t_tpl.pack(fill="both", expand=True, pady=(0, 8))
+        c4 = ctk.CTkFrame(scroll, corner_radius=14, fg_color="#ffffff")
+        c4.pack(fill="x", pady=6)
+        ctk.CTkLabel(c4, text="📐 전용 틀 직접 수정 (웬만하면 비워두세요 — 비우면 학원 정보로 자동 생성)",
+                     font=self.f_small, text_color=SUB).pack(anchor="w", padx=16, pady=(12, 4))
+        t_tpl = ctk.CTkTextbox(c4, height=140, corner_radius=8, font=self.f_body,
+                               border_width=1, border_color="#d7dce3", wrap="word")
+        t_tpl.pack(fill="x", padx=16, pady=(0, 14))
         t_tpl.insert("1.0", self.settings.get("template", ""))
 
         def do_save():
@@ -382,7 +454,8 @@ class App(tk.Tk):
             self.log("설정을 저장했습니다. (이 컴퓨터에만 저장 — 외부 전송 없음)")
             win.destroy()
 
-        ttk.Button(frm, text="💾 저장", command=do_save).pack(anchor="e")
+        ctk.CTkButton(scroll, text="💾 저장", height=40, corner_radius=10, font=self.f_btn,
+                      fg_color=GREEN, hover_color=GREEN_DARK, command=do_save).pack(fill="x", pady=8)
 
 
 if __name__ == "__main__":

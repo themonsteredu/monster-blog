@@ -15,7 +15,7 @@ if errorlevel 1 (
 
 echo [2/3] Installing packages...
 python -m pip install --upgrade pip
-python -m pip install selenium anthropic pillow pyinstaller
+python -m pip install selenium anthropic pillow customtkinter pyinstaller
 if errorlevel 1 (
   echo ERROR: package install failed. Check your internet connection.
   pause
@@ -23,7 +23,9 @@ if errorlevel 1 (
 )
 
 echo [3/3] Building exe... this takes a few minutes, please wait...
-python -m PyInstaller --noconfirm --clean --windowed --name MonsterBlog main.py
+rem --collect-all selenium: selenium loads submodules lazily, so PyInstaller misses them without this
+rem --collect-all customtkinter: bundles its theme/data files
+python -m PyInstaller --noconfirm --clean --windowed --name MonsterBlog --collect-all selenium --collect-all anthropic --collect-all customtkinter main.py
 if errorlevel 1 (
   echo ERROR: build failed.
   pause
