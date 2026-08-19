@@ -5,6 +5,23 @@
 
 ## 설치
 
+### 윈도우 — 한 줄 자동 설치 (권장)
+
+**윈도우키 + R** → `cmd` → Enter → 아래 한 줄을 통째로 붙여넣고 Enter:
+
+```
+mkdir C:\blog-desktop 2>nul & cd /d C:\blog-desktop & curl.exe -L -o install-desktop.bat "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/install-desktop.bat" & install-desktop.bat
+```
+
+파일이 `C:\blog-desktop`에 자동으로 받아지고 프로그램이 바로 켜집니다.
+파이썬이 없는 컴퓨터면 파이썬 다운로드 페이지가 대신 열립니다 —
+설치할 때 **"Add python.exe to PATH" 체크**를 꼭 켜고, 끝나면 `C:\blog-desktop`의
+`install-desktop.bat`을 더블클릭하면 이어서 설치됩니다.
+
+업데이트도 같은 방법: `install-desktop.bat` 더블클릭 (설정은 그대로 유지됩니다).
+
+### 수동 설치
+
 ```bash
 pip install -r requirements.txt
 ```
