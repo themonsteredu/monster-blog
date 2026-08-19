@@ -46,6 +46,7 @@ def _make_driver():
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     options.add_argument(f"--user-data-dir={PROFILE_DIR}")
     d = webdriver.Chrome(options=options)
+    d.set_script_timeout(120)  # 한 글자씩 타이핑하는 비동기 스크립트용
     try:
         d.execute_cdp_cmd(
             "Page.addScriptToEvaluateOnNewDocument",
@@ -201,12 +202,70 @@ return { res: document.querySelectorAll('.se-image-resource').length,
          img: document.querySelectorAll('img').length };
 """
 
-JS_TYPE_HERE_OK = """
+# 본문 한 줄을 '에디터 안에서' 한 글자씩 타이핑 (확장 background.js 의 검증된 방식).
+# CDP insertText 는 네이버 본문 에디터가 무시하는 경우가 있어 execCommand 로 입력한다.
+JS_TYPE_LINE = """
+const line = arguments[0];
+const done = arguments[arguments.length - 1];
+const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+  || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+const b = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0];
+if (!b) { done(false); return; }
+b.focus();
+const r = document.createRange(); r.selectNodeContents(b); r.collapse(false);
+const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+let i = 0;
+(function step() {
+  if (i >= line.length) { done(true); return; }
+  document.execCommand('insertText', false, line[i++]);
+  setTimeout(step, 4);
+})();
+"""
+
+# 커서 위치 그대로 타이핑 (빈 인용구 박스 '안'에 문장을 넣을 때 — 끝으로 이동하지 않음)
+JS_TYPE_HERE = """
+const text = arguments[0];
+const done = arguments[arguments.length - 1];
 const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]'));
-const eds = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e));
-const b = eds[0];
+const b = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0];
 const s = window.getSelection();
-return !!(b && s && s.anchorNode && b.contains(s.anchorNode));
+if (!b || !s || !s.anchorNode || !b.contains(s.anchorNode)) { done(false); return; }
+let i = 0;
+(function step() {
+  if (i >= text.length) { done(true); return; }
+  document.execCommand('insertText', false, text[i++]);
+  setTimeout(step, 4);
+})();
+"""
+
+# 제목 예비 입력 (클릭+insertText 가 실패했을 때): 제목칸에 직접 넣고 이벤트를 쏜다
+JS_TITLE_FALLBACK = """
+const title = arguments[0];
+const inToolbar = el => !!el.closest('[class*="toolbar"], [class*="Toolbar"], [role="toolbar"]');
+const sels = ['input[placeholder*="제목"]', 'textarea[placeholder*="제목"]',
+  '[contenteditable="true"][data-placeholder*="제목"]', '.se-documentTitle [contenteditable="true"]',
+  '.se-section-documentTitle [contenteditable="true"]', '[class*="documentTitle"] [contenteditable="true"]'];
+let t = null;
+for (const s of sels) {
+  const f = [...document.querySelectorAll(s)].filter(e => !inToolbar(e));
+  if (f[0]) { t = f[0]; break; }
+}
+if (!t) return false;
+t.focus();
+if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') {
+  try {
+    const proto = t.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(t, title);
+  } catch (_) { t.value = title; }
+  t.dispatchEvent(new Event('input', { bubbles: true }));
+  t.dispatchEvent(new Event('change', { bubbles: true }));
+} else {
+  const r = document.createRange(); r.selectNodeContents(t);
+  const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+  document.execCommand('insertText', false, title);
+}
+const v = typeof t.value === 'string' ? t.value : (t.textContent || '');
+return v.indexOf(title.slice(0, 5)) !== -1;
 """
 
 JS_QUOTE_BTN = """
@@ -295,13 +354,19 @@ return addBtn || titleLink || it;
 """
 
 JS_MAP_CONFIRM = """
-const clickable = [...document.querySelectorAll('button, [role="button"], a')].filter(b => {
-  const rr = b.getBoundingClientRect(); return rr.width > 0 && rr.height > 0;
-});
-return clickable.find(b => {
+const vis = b => { const rr = b.getBoundingClientRect(); return rr.width > 0 && rr.height > 0; };
+const all = [...document.querySelectorAll('button, [role="button"], a')].filter(vis);
+// 1순위: 텍스트가 정확히 '확인'인 버튼 (지도 팝업 하단의 확정 버튼)
+let cands = all.filter(b => (b.textContent||'').trim() === '확인');
+// 2순위: 확인 계열 텍스트/속성
+if (!cands.length) cands = all.filter(b => {
   const s = (b.textContent||'').trim() + (b.getAttribute('aria-label')||'') + (b.getAttribute('title')||'') + (b.className||'');
   return /확인|추가|완료|등록|삽입|적용|apply|confirm|submit/i.test(s);
-}) || null;
+});
+// 팝업/레이어 안에 있는 것 우선, 그다음 화면 아래쪽(팝업 하단) 우선
+const inLayer = b => !!b.closest('[class*="popup"], [class*="layer"], [class*="Layer"], [role="dialog"]');
+cands.sort((a, b) => (inLayer(b) - inLayer(a)) || (b.getBoundingClientRect().top - a.getBoundingClientRect().top));
+return cands[0] || null;
 """
 
 JS_SAVE_BTN = """
@@ -417,14 +482,21 @@ def _open_writer(d, log):
         time.sleep(2)
     if body_path is None:
         raise RuntimeError("글쓰기 화면(본문칸)을 찾지 못했습니다. 네이버에 로그인돼 있는지 확인하세요.")
-    # 방해 팝업 닫기 ("작성 중인 글", 도움말 등)
-    _goto(d, body_path)
-    for sel in (".se-popup-button-cancel", ".se-popup-button-close", ".se-help-panel-close-button"):
+    # 방해 팝업 닫기 ("작성 중인 글", 도움말 등) — 모든 프레임에서. 팝업이 남아있으면
+    # 제목 클릭이 가로막혀 제목 입력이 실패한다.
+    for path in _frame_paths(d):
         try:
-            d.find_element(By.CSS_SELECTOR, sel).click()
-            time.sleep(0.5)
+            _goto(d, path)
+            for sel in (".se-popup-button-cancel", ".se-popup-button-close", ".se-help-panel-close-button"):
+                for el in d.find_elements(By.CSS_SELECTOR, sel):
+                    try:
+                        el.click()
+                        time.sleep(0.4)
+                    except Exception:
+                        pass
         except Exception:
             pass
+    _goto(d, body_path)
     log("글쓰기 화면 준비 완료")
     return body_path
 
@@ -435,20 +507,29 @@ def _fill_title(d, body_path, title, notes, log):
     if el is None:
         notes.append("title:제목칸못찾음")
         return False
+    # 1차: 진짜 클릭으로 포커스 → trusted insertText
     try:
         el.click()
         time.sleep(0.4)
-        if not d.execute_script(JS_TITLE_FOCUSED):
-            notes.append("title:제목포커스실패")
-            return False
-        _insert_text(d, title)
-        time.sleep(0.4)
-        ok = bool(d.execute_script(JS_CHECK_TITLE, title[:5]))
+        if d.execute_script(JS_TITLE_FOCUSED):
+            _insert_text(d, title)
+            time.sleep(0.4)
+            if d.execute_script(JS_CHECK_TITLE, title[:5]):
+                return True
+            notes.append("title:입력후확인안됨→예비로")
+        else:
+            notes.append("title:포커스실패→예비로")
+    except Exception as e:
+        notes.append(f"title:{type(e).__name__}→예비로")
+    # 2차 예비: 제목칸에 직접 넣기 (확장 typeTitleFallback 과 동일)
+    try:
+        _goto(d, path)
+        ok = bool(d.execute_script(JS_TITLE_FALLBACK, title))
         if not ok:
-            notes.append("title:입력후확인안됨")
+            notes.append("title:예비도실패")
         return ok
     except Exception as e:
-        notes.append(f"title:{e}")
+        notes.append(f"title:예비 {type(e).__name__}")
         return False
 
 
@@ -458,12 +539,10 @@ def _focus_body_end(d, body_path):
 
 
 def _type_line(d, body_path, line):
-    """본문 끝에 한 줄 입력. (커서를 끝으로 → trusted insertText)"""
-    if not _focus_body_end(d, body_path):
-        return False
-    _insert_text(d, line)
-    time.sleep(0.1)
-    return True
+    """본문 끝에 한 줄 타이핑 — 에디터 안 execCommand 방식 (확장에서 검증됨).
+    CDP insertText 는 네이버 본문이 무시할 수 있어 쓰지 않는다."""
+    _goto(d, body_path)
+    return bool(d.execute_async_script(JS_TYPE_LINE, line))
 
 
 def _enter(d, body_path):
@@ -586,10 +665,9 @@ def _insert_quote(d, body_path, text, notes):
                 if opt is not None:
                     opt.click()
                     time.sleep(0.6)
-            # 커서가 새 빈 박스 안 → 그 자리에 trusted 타이핑
+            # 커서가 새 빈 박스 안 → 그 자리에 타이핑 (execCommand — 확장 검증 방식)
             _goto(d, body_path)
-            if d.execute_script(JS_TYPE_HERE_OK):
-                _insert_text(d, text)
+            if d.execute_async_script(JS_TYPE_HERE, text):
                 time.sleep(0.2)
                 applied = True
                 # 출처칸에 같은 문장이 복제됐으면 비운다

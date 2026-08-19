@@ -24,7 +24,7 @@ import generate
 import robot
 
 APP_NAME = "몬스터 블로그"
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 APP_DIR = Path.home() / ".monster_blog"
 SETTINGS_FILE = APP_DIR / "settings.json"
@@ -43,6 +43,7 @@ DEFAULT_SETTINGS = {
     "profile": {},        # 학원 정보 (비우면 더몬스터학원 기본값)
     "template": "",       # 전용 틀 직접 수정용 (비우면 자동 생성)
     "try_map": False,     # 지도 자동 첨부 (실험 기능)
+    "make_cards": False,  # 사진이 없을 때 인용구 카드 이미지 생성 (기본 끔)
 }
 
 
@@ -157,8 +158,7 @@ class App(ctk.CTk):
         ctk.CTkButton(r1, text="📷 사진 선택", width=110, height=34, corner_radius=8,
                       font=self.f_body, fg_color="#f0f2f5", hover_color="#e3e6ea",
                       text_color=INK, command=self.on_pick_photos).pack(side="left", padx=8)
-        self.lbl_photos = ctk.CTkLabel(r1, text="사진 없음 — 없으면 인용구 카드 이미지로 대체",
-                                       font=self.f_small, text_color=SUB)
+        self.lbl_photos = ctk.CTkLabel(r1, text="사진 없음", font=self.f_small, text_color=SUB)
         self.lbl_photos.pack(side="left", padx=4)
 
         self.e_topic = self._entry(gf, "주제  (예: 예비 고1 지금 해야 할 일)")
@@ -292,7 +292,7 @@ class App(ctk.CTk):
         self.photo_paths = list(paths)
         n = len(self.photo_paths)
         self.lbl_photos.configure(
-            text=f"사진 {n}장 선택됨 ✓" if n else "사진 없음 — 없으면 인용구 카드 이미지로 대체",
+            text=f"사진 {n}장 선택됨 ✓" if n else "사진 없음",
             text_color=GREEN_DARK if n else SUB)
 
     def on_generate(self):
@@ -352,9 +352,10 @@ class App(ctk.CTk):
 
         def work():
             OUT_DIR.mkdir(parents=True, exist_ok=True)
-            # 사진이 없으면 [이미지N] 자리에 인용구 카드 이미지를 만들어 사용
+            # 사진이 없을 때: 설정에서 켠 경우에만 [이미지N] 자리에 인용구 카드 이미지 생성
+            # (끄면 [이미지N] 자리는 그냥 건너뛴다)
             images = photos
-            if not images:
+            if not images and self.settings.get("make_cards"):
                 try:
                     region = (profile.get("region") or "").split(",")[0].strip()
                     footer_text = profile.get("name", "") + (" · " + region if region else "")
@@ -434,7 +435,10 @@ class App(ctk.CTk):
         c3.pack(fill="x", pady=6)
         v_map = tk.BooleanVar(value=bool(self.settings.get("try_map")))
         ctk.CTkCheckBox(c3, text="글 끝에 지도(장소) 자동 첨부 — 실험 기능", variable=v_map,
-                        font=self.f_body, fg_color=GREEN, hover_color=GREEN_DARK).pack(anchor="w", padx=16, pady=12)
+                        font=self.f_body, fg_color=GREEN, hover_color=GREEN_DARK).pack(anchor="w", padx=16, pady=(12, 4))
+        v_cards = tk.BooleanVar(value=bool(self.settings.get("make_cards")))
+        ctk.CTkCheckBox(c3, text="사진이 없을 때 [이미지N] 자리에 인용구 카드 이미지 넣기", variable=v_cards,
+                        font=self.f_body, fg_color=GREEN, hover_color=GREEN_DARK).pack(anchor="w", padx=16, pady=(0, 12))
 
         c4 = ctk.CTkFrame(scroll, corner_radius=14, fg_color="#ffffff")
         c4.pack(fill="x", pady=6)
@@ -449,6 +453,7 @@ class App(ctk.CTk):
             self.settings["anthropic_api_key"] = e_key.get().strip()
             self.settings["profile"] = {k: e.get().strip() for k, e in entries.items()}
             self.settings["try_map"] = bool(v_map.get())
+            self.settings["make_cards"] = bool(v_cards.get())
             self.settings["template"] = t_tpl.get("1.0", "end").strip()
             save_settings(self.settings)
             self.log("설정을 저장했습니다. (이 컴퓨터에만 저장 — 외부 전송 없음)")
