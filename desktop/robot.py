@@ -202,6 +202,28 @@ return { res: document.querySelectorAll('.se-image-resource').length,
          img: document.querySelectorAll('img').length };
 """
 
+JS_FIND_BODY = """
+const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+  || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+return [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0] || null;
+"""
+
+JS_BODY_LEN = """
+const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+  || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+const b = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0];
+return b ? (b.textContent||'').length : -1;
+"""
+
+JS_QUOTE_LASTLEN = """
+const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]'));
+const b = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0];
+if (!b) return -1;
+const qs = b.querySelectorAll(".se-quotation, .se-component-quotation, .se-quote, blockquote, [class*='quotation']");
+const last = qs[qs.length - 1];
+return last ? (last.textContent||'').trim().length : -1;
+"""
+
 # 본문 한 줄을 '에디터 안에서' 한 글자씩 타이핑 (확장 background.js 의 검증된 방식).
 # CDP insertText 는 네이버 본문 에디터가 무시하는 경우가 있어 execCommand 로 입력한다.
 JS_TYPE_LINE = """
@@ -516,12 +538,26 @@ def _fill_title(d, body_path, title, notes, log):
             time.sleep(0.4)
             if d.execute_script(JS_CHECK_TITLE, title[:5]):
                 return True
-            notes.append("title:입력후확인안됨→예비로")
+            notes.append("title:insertText무반응")
         else:
-            notes.append("title:포커스실패→예비로")
+            notes.append("title:포커스실패")
     except Exception as e:
-        notes.append(f"title:{type(e).__name__}→예비로")
-    # 2차 예비: 제목칸에 직접 넣기 (확장 typeTitleFallback 과 동일)
+        notes.append(f"title:{type(e).__name__}")
+    # 2차: 클릭된 상태에서 클립보드 + 진짜 Ctrl+V
+    try:
+        _goto(d, path)
+        if _clip_text(d, title):
+            el.click()
+            time.sleep(0.3)
+            ActionChains(d).key_down(Keys.CONTROL).send_keys("v").key_up(Keys.CONTROL).perform()
+            time.sleep(0.4)
+            if d.execute_script(JS_CHECK_TITLE, title[:5]):
+                notes.append("title:붙여넣기로 성공")
+                return True
+            notes.append("title:붙여넣기무반응")
+    except Exception as e:
+        notes.append(f"title:붙여넣기 {type(e).__name__}")
+    # 3차 예비: 제목칸에 직접 넣기 (확장 typeTitleFallback 과 동일)
     try:
         _goto(d, path)
         ok = bool(d.execute_script(JS_TITLE_FALLBACK, title))
@@ -538,15 +574,95 @@ def _focus_body_end(d, body_path):
     return bool(d.execute_script(JS_FOCUS_BODY_END))
 
 
-def _type_line(d, body_path, line):
-    """본문 끝에 한 줄 타이핑 — 에디터 안 execCommand 방식 (확장에서 검증됨).
-    CDP insertText 는 네이버 본문이 무시할 수 있어 쓰지 않는다."""
+def _bring_front(d):
+    """크롬 창을 화면 앞으로. 창이 뒤에 있으면 키 입력을 에디터가 무시할 수 있다."""
+    try:
+        d.execute_cdp_cmd("Page.bringToFront", {})
+    except Exception:
+        pass
+    try:
+        d.switch_to.window(d.current_window_handle)
+    except Exception:
+        pass
+
+
+def _cursor_body_end(d, body_path):
+    """진짜 클릭으로 본문에 포커스를 주고 Ctrl+End 로 커서를 글 끝으로."""
     _goto(d, body_path)
-    return bool(d.execute_async_script(JS_TYPE_LINE, line))
+    try:
+        el = d.execute_script(JS_FIND_BODY)
+        if el is not None:
+            el.click()
+            time.sleep(0.15)
+    except Exception:
+        pass
+    try:
+        ActionChains(d).key_down(Keys.CONTROL).send_keys(Keys.END).key_up(Keys.CONTROL).perform()
+        time.sleep(0.1)
+    except Exception:
+        pass
+    d.execute_script(JS_FOCUS_BODY_END)
+
+
+def _body_len(d, body_path):
+    _goto(d, body_path)
+    try:
+        return int(d.execute_script(JS_BODY_LEN))
+    except Exception:
+        return -1
+
+
+def _clip_text(d, text):
+    """시스템 클립보드에 텍스트를 올린다 (페이지 쪽 API 이용)."""
+    try:
+        d.execute_cdp_cmd("Browser.grantPermissions",
+                          {"permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
+    except Exception:
+        pass
+    w = d.execute_cdp_cmd("Runtime.evaluate", {
+        "expression": "navigator.clipboard.writeText(" + json.dumps(text) + ").then(()=>'ok').catch(e=>'err:'+e)",
+        "awaitPromise": True, "returnByValue": True, "userGesture": True,
+    })
+    return (w.get("result") or {}).get("value") == "ok"
+
+
+def _type_text(d, body_path, text, notes, state):
+    """본문 끝에 텍스트 한 덩이 입력 — 3가지 방식을 순서대로 시도하고,
+    '실제로 글자가 들어갔는지' 확인해서 성공한 방식을 기억해 다음부터 그것만 쓴다.
+    A) 진짜 클릭 + trusted insertText  B) 에디터 안 execCommand 타이핑  C) 클립보드 + 진짜 Ctrl+V"""
+    order = []
+    if state.get("best"):
+        order.append(state["best"])
+    order += [m for m in ("cdp", "js", "paste") if m not in order]
+    for m in order:
+        before = _body_len(d, body_path)
+        try:
+            if m == "cdp":
+                _cursor_body_end(d, body_path)
+                _insert_text(d, text)
+            elif m == "js":
+                _goto(d, body_path)
+                d.execute_async_script(JS_TYPE_LINE, text)
+            else:
+                if not _clip_text(d, text):
+                    notes.append("type-paste:클립보드실패")
+                    continue
+                _cursor_body_end(d, body_path)
+                ActionChains(d).key_down(Keys.CONTROL).send_keys("v").key_up(Keys.CONTROL).perform()
+            time.sleep(0.2)
+            if _body_len(d, body_path) > before:
+                if state.get("best") != m:
+                    state["best"] = m
+                    notes.append("입력방식:" + m)
+                return True
+            notes.append(f"type-{m}:무반응")
+        except Exception as e:
+            notes.append(f"type-{m}:{type(e).__name__}")
+    return False
 
 
 def _enter(d, body_path):
-    _focus_body_end(d, body_path)
+    """진짜 Enter (문단 나누기). 커서는 직전 입력 위치에 있다."""
     _press(d, Keys.ENTER)
     time.sleep(0.08)
 
@@ -626,7 +742,7 @@ def _insert_image(d, body_path, image_path, notes):
         })
         wv = (w.get("result") or {}).get("value")
         if wv == "ok":
-            _focus_body_end(d, body_path)
+            _cursor_body_end(d, body_path)
             time.sleep(0.3)
             ActionChains(d).key_down(Keys.CONTROL).send_keys("v").key_up(Keys.CONTROL).perform()
             if _wait_more_images(d, body_path, before, 12):
@@ -639,8 +755,9 @@ def _insert_image(d, body_path, image_path, notes):
     return False
 
 
-def _insert_quote(d, body_path, text, notes):
+def _insert_quote(d, body_path, text, notes, state):
     """인용구 박스(세로줄 우선)를 만들고 그 안에 문장을 넣는다. 실패하면 일반 문단으로."""
+    _cursor_body_end(d, body_path)
     _enter(d, body_path)  # 인용 앞 여백
     applied = False
     try:
@@ -665,19 +782,29 @@ def _insert_quote(d, body_path, text, notes):
                 if opt is not None:
                     opt.click()
                     time.sleep(0.6)
-            # 커서가 새 빈 박스 안 → 그 자리에 타이핑 (execCommand — 확장 검증 방식)
+            # 커서가 새 빈 박스 안 → 그 자리에 입력하고 '실제로 들어갔는지' 확인
+            # 1차: trusted insertText (박스를 진짜 클릭으로 만들었으니 포커스가 박스 안)
             _goto(d, body_path)
-            if d.execute_async_script(JS_TYPE_HERE, text):
-                time.sleep(0.2)
+            _insert_text(d, text)
+            time.sleep(0.25)
+            if int(d.execute_script(JS_QUOTE_LASTLEN)) > 0:
                 applied = True
+            else:
+                # 2차: 에디터 안 execCommand 타이핑
+                d.execute_async_script(JS_TYPE_HERE, text)
+                time.sleep(0.25)
+                applied = int(d.execute_script(JS_QUOTE_LASTLEN)) > 0
+                if not applied:
+                    notes.append("인용:문장입력무반응")
+            if applied:
                 # 출처칸에 같은 문장이 복제됐으면 비운다
                 cite = d.execute_script(JS_QUOTE_CITE, text)
                 if cite is not None:
                     cite.click()
                     time.sleep(0.2)
                     _select_all_delete(d)
-            # 박스 밖으로 탈출
-            _focus_body_end(d, body_path)
+            # 박스 밖으로 탈출 (본문 진짜 클릭 + 아래 방향키)
+            _cursor_body_end(d, body_path)
             _press(d, Keys.ARROW_DOWN)
             time.sleep(0.15)
         else:
@@ -685,7 +812,7 @@ def _insert_quote(d, body_path, text, notes):
     except Exception as e:
         notes.append(f"인용:{e}")
     if not applied:
-        _type_line(d, body_path, text)  # 문장을 일반 문단으로라도 남긴다
+        _type_text(d, body_path, text, notes, state)  # 문장을 일반 문단으로라도 남긴다
     _enter(d, body_path)
     return applied
 
@@ -826,6 +953,11 @@ def post(title, body, image_paths=None, footer_path=None, publish_mode="draft",
     d = get_driver()
     body_path = _open_writer(d, log)
 
+    # 크롬 창을 앞으로 — 창이 뒤에 있으면 에디터가 키 입력을 무시할 수 있다
+    _bring_front(d)
+    log("⚠ 입력이 끝날 때까지 크롬 창과 마우스·키보드를 건드리지 마세요!")
+    time.sleep(0.5)
+
     title_ok = _fill_title(d, body_path, title, notes, log) if title else False
 
     # 본문을 세그먼트로: 텍스트 / [이미지N] / [인용] (확장 background.js 와 같은 규칙)
@@ -852,32 +984,38 @@ def post(title, body, image_paths=None, footer_path=None, publish_mode="draft",
 
     log("본문 입력 중… (크롬 창에 실시간으로 써집니다)")
     img_ok = img_total = 0
+    state = {}  # 성공한 입력 방식 기억 (cdp / js / paste)
+    _cursor_body_end(d, body_path)
     for kind, val in segs:
         if kind == "text":
             for line in val:
                 if line == "":
                     _enter(d, body_path)
                     continue
-                if not _type_line(d, body_path, line):
-                    raise RuntimeError("본문이 안 써졌어요. 크롬 창을 새로고침(F5)한 뒤 다시 시도해 주세요.")
+                if not _type_text(d, body_path, line, notes, state):
+                    raise RuntimeError(
+                        "본문이 안 써졌어요. 크롬 창을 건드리지 말고 다시 시도해 주세요.\n"
+                        "진단: " + " | ".join(notes[-6:]))
                 _enter(d, body_path)
         elif kind == "quote":
             log("인용구 넣는 중…")
-            _insert_quote(d, body_path, val, notes)
+            _insert_quote(d, body_path, val, notes, state)
         else:
             if 0 <= val < len(image_paths):
                 img_total += 1
                 log(f"사진 {val + 1} 넣는 중…")
                 if _insert_image(d, body_path, image_paths[val], notes):
                     img_ok += 1
+                _cursor_body_end(d, body_path)  # 이미지 뒤에 커서 복귀
 
     # 하단 연락처 배너 (글 맨 끝)
     if footer_path:
         log("하단 연락처 배너 넣는 중…")
-        _focus_body_end(d, body_path)
+        _cursor_body_end(d, body_path)
         _enter(d, body_path)
         if not _insert_image(d, body_path, footer_path, notes):
             notes.append("배너:실패")
+        _cursor_body_end(d, body_path)
         _enter(d, body_path)
 
     # 지도(장소) 첨부 — 설정에서 켠 경우에만 (실험 기능)
