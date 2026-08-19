@@ -1,0 +1,828 @@
+# desktop/robot.py — 네이버 블로그 로봇 (설치형 데스크톱 버전)
+#
+# 확장프로그램(background.js v1.9.x)에서 검증된 방식을 셀레늄으로 옮긴 것.
+# 셀레늄의 클릭/키입력은 브라우저 입장에서 '진짜 사용자 입력(trusted)'이라
+# 확장에서 CDP 디버거로 어렵게 만들던 것들이 여기서는 기본으로 통과된다.
+#
+# ★★ 정직한 주의사항 ★★
+# - 네이버가 글쓰기 화면 구조를 바꾸면 아래 JS 선택자를 손봐야 한다 (확장과 동일한 한계).
+# - 처음 로그인은 캡차/기기등록 때문에 사람이 크롬 창에서 직접 마무리해야 할 수 있다.
+#   그 뒤부터는 전용 크롬 프로필에 세션이 저장돼 자동 로그인된다.
+# - 예약 시간 입력칸을 못 다루면 창을 열어둔 채 멈춘다 (엉뚱한 시간 자동발행 방지).
+
+import base64
+import json
+import os
+import re
+import time
+from pathlib import Path
+
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
+
+NAVER_HOME = "https://www.naver.com"
+NAVER_LOGIN = "https://nid.naver.com/nidlogin.login"
+BLOG_WRITE = "https://blog.naver.com/GoBlogWrite.naver"
+
+APP_DIR = Path.home() / ".monster_blog"
+PROFILE_DIR = APP_DIR / "chrome_profile"  # 로그인 세션 저장용 전용 크롬 프로필
+
+_driver = None  # 프로그램이 살아있는 동안 크롬 창 하나를 계속 재사용
+
+
+# ---------- 드라이버 ----------
+
+def _make_driver():
+    options = webdriver.ChromeOptions()
+    options.add_argument("--start-maximized")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    options.add_argument(f"--user-data-dir={PROFILE_DIR}")
+    d = webdriver.Chrome(options=options)
+    try:
+        d.execute_cdp_cmd(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {"source": "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"},
+        )
+    except Exception:
+        pass
+    return d
+
+
+def get_driver():
+    """살아있는 크롬 창을 돌려주고, 죽었으면 새로 띄운다."""
+    global _driver
+    if _driver is not None:
+        try:
+            _ = _driver.current_url  # 살아있는지 확인
+            return _driver
+        except Exception:
+            _driver = None
+    _driver = _make_driver()
+    return _driver
+
+
+def close_driver():
+    global _driver
+    if _driver is not None:
+        try:
+            _driver.quit()
+        except Exception:
+            pass
+        _driver = None
+
+
+def _insert_text(d, text):
+    """현재 포커스 위치에 trusted 텍스트 입력 (한글 완벽 지원 — 확장과 같은 CDP 방식)."""
+    d.execute_cdp_cmd("Input.insertText", {"text": text})
+
+
+def _press(d, key):
+    ActionChains(d).send_keys(key).perform()
+
+
+def _select_all_delete(d):
+    ActionChains(d).key_down(Keys.CONTROL).send_keys("a").key_up(Keys.CONTROL).perform()
+    time.sleep(0.15)
+    _press(d, Keys.DELETE)
+    time.sleep(0.15)
+
+
+# ---------- 로그인 ----------
+
+def _logged_in(d):
+    d.get(NAVER_HOME)
+    time.sleep(2)
+    return len(d.find_elements(By.XPATH, "//*[contains(text(),'로그아웃')]")) > 0
+
+
+def ensure_login(naver_id, naver_pw, log=print, manual_wait=240):
+    """프로그램 안에서 받은 아이디/비번으로 로그인. 세션이 남아있으면 그대로 통과.
+    캡차 등으로 자동이 막히면, 열려있는 크롬 창에서 사람이 직접 마무리할 시간을 준다."""
+    d = get_driver()
+    if _logged_in(d):
+        log("이미 로그인되어 있습니다. (저장된 세션 사용)")
+        return True
+
+    d.get(NAVER_LOGIN)
+    time.sleep(2)
+    if naver_id and naver_pw:
+        try:
+            # .value 직접 대입은 네이버가 감지하므로, 진짜 입력 경로(insertText)로 넣는다
+            d.find_element(By.CSS_SELECTOR, "#id").click()
+            time.sleep(0.3)
+            _insert_text(d, naver_id)
+            time.sleep(0.3)
+            d.find_element(By.CSS_SELECTOR, "#pw").click()
+            time.sleep(0.3)
+            _insert_text(d, naver_pw)
+            time.sleep(0.3)
+            d.find_element(By.CSS_SELECTOR, "[id='log.login'], .btn_login").click()
+            time.sleep(3)
+        except Exception as e:
+            log(f"자동 입력이 막혔습니다 — 크롬 창에서 직접 로그인해 주세요. ({e})")
+
+    log("로그인 확인 중... 캡차/기기등록이 뜨면 '크롬 창에서 직접' 진행해 주세요.")
+    end = time.time() + manual_wait
+    while time.time() < end:
+        try:
+            if "nid.naver.com" not in d.current_url:
+                time.sleep(1)
+                if _logged_in(d):
+                    log("로그인 완료. (다음부터는 자동 로그인됩니다)")
+                    return True
+        except Exception:
+            return False
+        time.sleep(2)
+    log("로그인 대기 시간이 지났습니다.")
+    return False
+
+
+# ---------- 프레임 탐색 ----------
+# 글쓰기 화면은 시기/경로에 따라 iframe(mainFrame) 안일 수도, 바로일 수도 있다.
+# '본문 편집칸이 있는 프레임'을 찾아 기억해두고, 그 프레임 안에서 모든 작업을 한다.
+
+JS_HAS_BODY = """
+const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+  || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+return [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e)).length > 0;
+"""
+
+JS_FOCUS_BODY_END = """
+const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+  || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+const b = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0];
+if (!b) return false;
+b.focus();
+const r = document.createRange(); r.selectNodeContents(b); r.collapse(false);
+const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+return true;
+"""
+
+JS_FIND_TITLE = """
+const inToolbar = el => !!el.closest('[class*="toolbar"], [class*="Toolbar"], [role="toolbar"]');
+const sels = ['input[placeholder*="제목"]', 'textarea[placeholder*="제목"]',
+  '[contenteditable="true"][data-placeholder*="제목"]', '.se-documentTitle [contenteditable="true"]',
+  '.se-section-documentTitle [contenteditable="true"]', '[class*="documentTitle"] [contenteditable="true"]'];
+for (const s of sels) {
+  const f = [...document.querySelectorAll(s)].filter(e => !inToolbar(e));
+  f.sort((a,b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
+  if (f[0]) return f[0];
+}
+return null;
+"""
+
+JS_TITLE_FOCUSED = """
+const ae = document.activeElement;
+if (!ae) return false;
+if (ae.closest && ae.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) return true;
+const ph = (ae.getAttribute && ((ae.getAttribute('placeholder')||'') + (ae.getAttribute('data-placeholder')||'') + (ae.getAttribute('aria-label')||''))) || '';
+if (/제목/.test(ph)) return true;
+return false;
+"""
+
+JS_CHECK_TITLE = """
+const sel = 'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], .se-documentTitle [contenteditable="true"], .se-section-documentTitle [contenteditable="true"]';
+const t = document.querySelector(sel);
+if (!t) return false;
+const v = typeof t.value === 'string' ? t.value : (t.textContent || '');
+return v.indexOf(arguments[0]) !== -1;
+"""
+
+JS_COUNT_IMAGES = """
+return { res: document.querySelectorAll('.se-image-resource').length,
+         img: document.querySelectorAll('img').length };
+"""
+
+JS_TYPE_HERE_OK = """
+const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]'));
+const eds = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e));
+const b = eds[0];
+const s = window.getSelection();
+return !!(b && s && s.anchorNode && b.contains(s.anchorNode));
+"""
+
+JS_QUOTE_BTN = """
+const btnSel = '[data-name="quotation"], button[data-log*="quotation"], button[aria-label*="인용"], button[title*="인용"], button[class*="quotation"]';
+let btn = document.querySelector(btnSel);
+if (!btn) btn = [...document.querySelectorAll('button')].find(b => (b.textContent||'').trim() === '인용구');
+if (!btn) return null;
+let arrow = null;
+const wrap = btn.parentElement;
+if (wrap) {
+  const others = [...wrap.querySelectorAll("button, [role='button']")].filter(
+    b => b !== btn && !btn.contains(b) && !b.contains(btn) && b.getBoundingClientRect().width > 0);
+  if (others[0]) arrow = others[0];
+}
+return [btn, arrow];
+"""
+
+JS_QUOTE_STYLE = """
+const idv = (x) => (typeof x.className === 'string' ? x.className : '') + (x.getAttribute('data-value')||'')
+  + (x.getAttribute('data-name')||'') + (x.getAttribute('data-log')||'') + (x.getAttribute('aria-label')||'') + (x.getAttribute('title')||'');
+const els = [...document.querySelectorAll("button, [role='button'], li, a")].filter(x => {
+  const rr = x.getBoundingClientRect();
+  if (!rr.width || !rr.height) return false;
+  return /quotation|인용/i.test(idv(x)) || /세로/.test((x.textContent||'').trim());
+});
+let o = els.find(x => /line|vertical/i.test(idv(x)) || /세로/.test(idv(x) + (x.textContent||'')));
+if (!o) {
+  const opts = els.filter(x => /option|list|layer/i.test(idv(x)) || x.tagName === 'LI');
+  if (opts.length > 1) o = opts[1]; else if (opts.length === 1) o = opts[0];
+}
+return o || null;
+"""
+
+JS_QUOTE_CITE = """
+const sameText = arguments[0];
+const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]'));
+const b = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0];
+if (!b) return null;
+const boxes = b.querySelectorAll(".se-quotation, .se-component-quotation, blockquote, [class*='quotation']");
+const box = boxes[boxes.length - 1];
+const scope = box || b;
+const cites = [...scope.querySelectorAll('[data-placeholder], [contenteditable="true"]')].filter(e => {
+  const ph = (e.getAttribute('data-placeholder')||'') + (typeof e.className === 'string' ? e.className : '');
+  return /출처|cite|source/i.test(ph);
+});
+const bad = cites.find(c => (c.textContent||'').trim() && (!sameText || (c.textContent||'').indexOf(sameText.slice(0,6)) !== -1));
+return bad || null;
+"""
+
+JS_MAP_BTN = """
+const sel = '[data-name="map"], button[data-log*="map"], button[aria-label*="장소"], button[title*="장소"]';
+let btn = document.querySelector(sel);
+if (!btn) btn = [...document.querySelectorAll('button')].find(b => (b.textContent||'').trim() === '장소');
+return btn || null;
+"""
+
+JS_MAP_SEARCH = """
+const ins = [...document.querySelectorAll('input')].filter(i => {
+  const rr = i.getBoundingClientRect();
+  if (!rr.width || !rr.height) return false;
+  const ph = (i.placeholder||'') + (i.getAttribute('aria-label')||'') + (i.className||'');
+  return /장소|위치|검색|place|search/i.test(ph);
+});
+return ins[0] || null;
+"""
+
+JS_MAP_RESULT = """
+const q = arguments[0];
+const vis = el => { const rr = el.getBoundingClientRect(); return rr.width > 4 && rr.height > 4; };
+let items = [...document.querySelectorAll('li, [class*="item"], [class*="result"], [class*="place"], [class*="search"] a, [class*="list"] > *')]
+  .filter(x => vis(x) && (x.textContent||'').indexOf(q) !== -1)
+  .filter(x => x.getBoundingClientRect().height < 160);
+items.sort((a,b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+let it = items[0];
+if (!it) {
+  const anyList = [...document.querySelectorAll('li, [class*="item"]')].filter(vis).filter(x => {
+    const h = x.getBoundingClientRect().height; return h > 24 && h < 160;
+  });
+  anyList.sort((a,b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+  it = anyList[0];
+  if (!it) return null;
+}
+const addBtn = [...it.querySelectorAll('button, a, [role="button"]')].find(b => /추가|선택|등록|확인/.test((b.textContent||'').trim()));
+const titleLink = it.querySelector('a, [class*="title"], strong, [class*="name"]');
+return addBtn || titleLink || it;
+"""
+
+JS_MAP_CONFIRM = """
+const clickable = [...document.querySelectorAll('button, [role="button"], a')].filter(b => {
+  const rr = b.getBoundingClientRect(); return rr.width > 0 && rr.height > 0;
+});
+return clickable.find(b => {
+  const s = (b.textContent||'').trim() + (b.getAttribute('aria-label')||'') + (b.getAttribute('title')||'') + (b.className||'');
+  return /확인|추가|완료|등록|삽입|적용|apply|confirm|submit/i.test(s);
+}) || null;
+"""
+
+JS_SAVE_BTN = """
+const cand = [...document.querySelectorAll('button, [role="button"], a')].filter(b => {
+  const rr = b.getBoundingClientRect();
+  if (rr.width < 16 || rr.height < 10) return false;
+  return /^저장/.test((b.textContent||'').trim());
+});
+cand.sort((a,b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+return cand[0] || null;
+"""
+
+JS_PUBLISH_OPEN = """
+const cand = [...document.querySelectorAll('button, [role="button"], a')].filter(b => {
+  const rr = b.getBoundingClientRect();
+  if (rr.width < 20 || rr.height < 10) return false;
+  const s = (b.textContent||'').trim() + (b.getAttribute('class')||'') + (b.getAttribute('data-click-area')||'') + (b.getAttribute('data-log')||'');
+  return /발행|publish/i.test(s);
+});
+cand.sort((a,b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+return cand[0] || null;
+"""
+
+JS_RESERVE_RADIO = """
+return [...document.querySelectorAll('label, button, [role="radio"], span, a')].find(b => {
+  const rr = b.getBoundingClientRect();
+  return rr.width > 0 && rr.height > 0 && /^예약/.test((b.textContent||'').trim());
+}) || null;
+"""
+
+JS_RESERVE_FIELDS = """
+const out = { inputs: [], selects: [] };
+document.querySelectorAll('input').forEach(i => {
+  const rr = i.getBoundingClientRect();
+  if (rr.width < 20 || rr.height < 10) return;
+  const meta = (i.type||'') + (i.placeholder||'') + (i.className||'') + (i.getAttribute('aria-label')||'');
+  if (/date|time|시|분|년|월|일|hour|min/i.test(meta) || i.type === 'date' || i.type === 'time')
+    out.inputs.push([i, meta.slice(0, 30)]);
+});
+document.querySelectorAll('select').forEach(s => {
+  const rr = s.getBoundingClientRect();
+  if (rr.width < 20 || rr.height < 10) return;
+  out.selects.push([s, (s.className||'').slice(0, 30)]);
+});
+if (!out.inputs.length && !out.selects.length) return null;
+return [out.inputs, out.selects];
+"""
+
+JS_PUBLISH_CONFIRM = """
+const cand = [...document.querySelectorAll('button, [role="button"], a')].filter(b => {
+  const rr = b.getBoundingClientRect();
+  if (rr.width < 20 || rr.height < 10) return false;
+  const s = (b.textContent||'').trim();
+  const meta = (b.getAttribute('class')||'') + (b.getAttribute('data-click-area')||'') + (b.getAttribute('data-testid')||'');
+  return /^발행$/.test(s) || /confirm|publish.*btn|btn.*publish|submit/i.test(meta);
+});
+cand.sort((a,b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+return cand[0] || null;
+"""
+
+
+def _frame_paths(d):
+    """최상위 + iframe(2단계까지)의 프레임 경로 목록. 예: [] , [0], [0,1]"""
+    paths = [[]]
+    d.switch_to.default_content()
+    n = len(d.find_elements(By.TAG_NAME, "iframe"))
+    for i in range(n):
+        paths.append([i])
+        try:
+            d.switch_to.default_content()
+            d.switch_to.frame(d.find_elements(By.TAG_NAME, "iframe")[i])
+            for j in range(len(d.find_elements(By.TAG_NAME, "iframe"))):
+                paths.append([i, j])
+        except Exception:
+            pass
+    d.switch_to.default_content()
+    return paths
+
+
+def _goto(d, path):
+    d.switch_to.default_content()
+    for idx in path:
+        frames = d.find_elements(By.TAG_NAME, "iframe")
+        if idx >= len(frames):
+            raise RuntimeError("프레임 구조가 바뀌었습니다")
+        d.switch_to.frame(frames[idx])
+
+
+def _find_in_frames(d, js, *args):
+    """모든 프레임에서 js 를 실행해 처음 참(비어있지 않은) 값을 낸 (경로, 결과)를 돌려준다."""
+    for path in _frame_paths(d):
+        try:
+            _goto(d, path)
+            res = d.execute_script(js, *args)
+            if res:
+                return path, res
+        except Exception:
+            continue
+    return None, None
+
+
+# ---------- 글쓰기 ----------
+
+def _open_writer(d, log):
+    d.get(BLOG_WRITE)
+    time.sleep(4)
+    # 본문 편집칸이 있는 프레임 찾기 (최대 20초)
+    body_path = None
+    for _ in range(10):
+        body_path, ok = _find_in_frames(d, JS_HAS_BODY)
+        if ok:
+            break
+        time.sleep(2)
+    if body_path is None:
+        raise RuntimeError("글쓰기 화면(본문칸)을 찾지 못했습니다. 네이버에 로그인돼 있는지 확인하세요.")
+    # 방해 팝업 닫기 ("작성 중인 글", 도움말 등)
+    _goto(d, body_path)
+    for sel in (".se-popup-button-cancel", ".se-popup-button-close", ".se-help-panel-close-button"):
+        try:
+            d.find_element(By.CSS_SELECTOR, sel).click()
+            time.sleep(0.5)
+        except Exception:
+            pass
+    log("글쓰기 화면 준비 완료")
+    return body_path
+
+
+def _fill_title(d, body_path, title, notes, log):
+    log("제목 입력 중…")
+    path, el = _find_in_frames(d, JS_FIND_TITLE)
+    if el is None:
+        notes.append("title:제목칸못찾음")
+        return False
+    try:
+        el.click()
+        time.sleep(0.4)
+        if not d.execute_script(JS_TITLE_FOCUSED):
+            notes.append("title:제목포커스실패")
+            return False
+        _insert_text(d, title)
+        time.sleep(0.4)
+        ok = bool(d.execute_script(JS_CHECK_TITLE, title[:5]))
+        if not ok:
+            notes.append("title:입력후확인안됨")
+        return ok
+    except Exception as e:
+        notes.append(f"title:{e}")
+        return False
+
+
+def _focus_body_end(d, body_path):
+    _goto(d, body_path)
+    return bool(d.execute_script(JS_FOCUS_BODY_END))
+
+
+def _type_line(d, body_path, line):
+    """본문 끝에 한 줄 입력. (커서를 끝으로 → trusted insertText)"""
+    if not _focus_body_end(d, body_path):
+        return False
+    _insert_text(d, line)
+    time.sleep(0.1)
+    return True
+
+
+def _enter(d, body_path):
+    _focus_body_end(d, body_path)
+    _press(d, Keys.ENTER)
+    time.sleep(0.08)
+
+
+def _count_images(d, body_path):
+    _goto(d, body_path)
+    c = d.execute_script(JS_COUNT_IMAGES)
+    return c or {"res": 0, "img": 0}
+
+
+def _wait_more_images(d, body_path, before, timeout):
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        time.sleep(0.5)
+        now = _count_images(d, body_path)
+        if now["res"] > before["res"] or now["img"] > before["img"]:
+            time.sleep(1.5)  # 업로드 마무리 여유
+            return True
+    return False
+
+
+def _clip_expr(b64, media_type):
+    # 확장과 동일: 사진을 클립보드에 올리는 페이지 쪽 코드 (PNG 변환 포함)
+    return (
+        "(async () => { try {"
+        f'const r = await fetch("data:{media_type};base64,{b64}");'
+        "let b = await r.blob();"
+        'if (b.type !== "image/png") {'
+        "  const bmp = await createImageBitmap(b);"
+        "  const c = new OffscreenCanvas(bmp.width, bmp.height);"
+        '  c.getContext("2d").drawImage(bmp, 0, 0);'
+        '  b = await c.convertToBlob({ type: "image/png" });'
+        "}"
+        'await navigator.clipboard.write([new ClipboardItem({ "image/png": b })]);'
+        'return "ok";'
+        '} catch (e) { return "err:" + (e && e.message ? e.message : e); } })()'
+    )
+
+
+def _insert_image(d, body_path, image_path, notes):
+    """이미지 한 장을 본문 끝에 삽입. A) 숨은 파일 input B) 클립보드 + 진짜 Ctrl+V"""
+    abspath = os.path.abspath(image_path)
+    if not os.path.exists(abspath):
+        notes.append(f"img:파일없음 {abspath}")
+        return False
+    before = _count_images(d, body_path)
+
+    # A) 파일 input 에 경로 직접 전달 (OS 파일창 없이 업로드)
+    _focus_body_end(d, body_path)
+    try:
+        _goto(d, body_path)
+        inputs = d.find_elements(By.CSS_SELECTOR, "input[type='file']")
+        if inputs:
+            inputs[-1].send_keys(abspath)
+            if _wait_more_images(d, body_path, before, 12):
+                return True
+            notes.append("img:A무반응")
+        else:
+            notes.append("img:A input없음")
+    except Exception as e:
+        notes.append(f"img:A {e}")
+
+    # B) 클립보드에 사진을 올리고 진짜 Ctrl+V (확장의 검증된 경로)
+    try:
+        data = Path(abspath).read_bytes()
+        b64 = base64.standard_b64encode(data).decode()
+        ext = Path(abspath).suffix.lower()
+        mt = "image/png" if ext == ".png" else "image/jpeg"
+        try:
+            d.execute_cdp_cmd("Browser.grantPermissions",
+                              {"permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]})
+        except Exception:
+            pass
+        w = d.execute_cdp_cmd("Runtime.evaluate", {
+            "expression": _clip_expr(b64, mt),
+            "awaitPromise": True, "returnByValue": True, "userGesture": True,
+        })
+        wv = (w.get("result") or {}).get("value")
+        if wv == "ok":
+            _focus_body_end(d, body_path)
+            time.sleep(0.3)
+            ActionChains(d).key_down(Keys.CONTROL).send_keys("v").key_up(Keys.CONTROL).perform()
+            if _wait_more_images(d, body_path, before, 12):
+                return True
+            notes.append("img:B무반응")
+        else:
+            notes.append(f"img:B {wv}")
+    except Exception as e:
+        notes.append(f"img:B {e}")
+    return False
+
+
+def _insert_quote(d, body_path, text, notes):
+    """인용구 박스(세로줄 우선)를 만들고 그 안에 문장을 넣는다. 실패하면 일반 문단으로."""
+    _enter(d, body_path)  # 인용 앞 여백
+    applied = False
+    try:
+        path, pair = _find_in_frames(d, JS_QUOTE_BTN)
+        if pair:
+            btn, arrow = pair[0], pair[1]
+            _focus_body_end(d, body_path)
+            _goto(d, path)
+            opened = False
+            if arrow is not None:
+                arrow.click()
+                time.sleep(0.6)
+                opt = d.execute_script(JS_QUOTE_STYLE)
+                if opt is not None:
+                    opt.click()
+                    time.sleep(0.6)
+                    opened = True
+            if not opened:
+                btn.click()
+                time.sleep(0.6)
+                opt = d.execute_script(JS_QUOTE_STYLE)
+                if opt is not None:
+                    opt.click()
+                    time.sleep(0.6)
+            # 커서가 새 빈 박스 안 → 그 자리에 trusted 타이핑
+            _goto(d, body_path)
+            if d.execute_script(JS_TYPE_HERE_OK):
+                _insert_text(d, text)
+                time.sleep(0.2)
+                applied = True
+                # 출처칸에 같은 문장이 복제됐으면 비운다
+                cite = d.execute_script(JS_QUOTE_CITE, text)
+                if cite is not None:
+                    cite.click()
+                    time.sleep(0.2)
+                    _select_all_delete(d)
+            # 박스 밖으로 탈출
+            _focus_body_end(d, body_path)
+            _press(d, Keys.ARROW_DOWN)
+            time.sleep(0.15)
+        else:
+            notes.append("인용:버튼못찾음")
+    except Exception as e:
+        notes.append(f"인용:{e}")
+    if not applied:
+        _type_line(d, body_path, text)  # 문장을 일반 문단으로라도 남긴다
+    _enter(d, body_path)
+    return applied
+
+
+def _attach_map(d, body_path, academy_name, notes, log):
+    """장소(지도) 첨부 — 실패하면 Esc 로 닫고 아무것도 넣지 않는다 (엉뚱한 지도 방지)."""
+    log("지도(장소) 첨부 중…")
+    try:
+        path, btn = _find_in_frames(d, JS_MAP_BTN)
+        if btn is None:
+            notes.append("지도:장소버튼없음")
+            return False
+        _focus_body_end(d, body_path)
+        _goto(d, path)
+        btn.click()
+        time.sleep(1.5)
+        spath, sinput = _find_in_frames(d, JS_MAP_SEARCH)
+        if sinput is None:
+            notes.append("지도:검색창없음")
+            _press(d, Keys.ESCAPE)
+            return False
+        sinput.click()
+        time.sleep(0.25)
+        _insert_text(d, academy_name)
+        time.sleep(0.25)
+        _press(d, Keys.ENTER)
+        time.sleep(2.2)
+        rpath, item = _find_in_frames(d, JS_MAP_RESULT, academy_name[:4])
+        if item is None:
+            notes.append(f"지도:검색결과없음({academy_name})")
+            _press(d, Keys.ESCAPE)
+            return False
+        item.click()
+        time.sleep(1.0)
+        cpath, cf = _find_in_frames(d, JS_MAP_CONFIRM)
+        if cf is None:
+            notes.append("지도:확인버튼없음")
+            _press(d, Keys.ESCAPE)
+            return False
+        cf.click()
+        time.sleep(1.4)
+        return True
+    except Exception as e:
+        notes.append(f"지도:{e}")
+        try:
+            _press(d, Keys.ESCAPE)
+        except Exception:
+            pass
+        return False
+
+
+def _do_publish(d, mode, when, notes, log):
+    """mode: 'now' | 'reserve', when: 'YYYY-MM-DDTHH:MM' (reserve 일 때)"""
+    log("예약 발행 처리 중…" if mode == "reserve" else "발행 중…")
+    path, op = _find_in_frames(d, JS_PUBLISH_OPEN)
+    if op is None:
+        notes.append("발행:상단버튼없음")
+        return "발행 버튼을 못 찾았어요 — 크롬 창에서 직접 발행해 주세요"
+    _goto(d, path)
+    op.click()
+    time.sleep(1.5)
+
+    if mode == "reserve":
+        rpath, rr = _find_in_frames(d, JS_RESERVE_RADIO)
+        if rr is None:
+            notes.append("발행:예약버튼없음")
+            return "발행창은 열렸어요. 예약 시간을 직접 고르고 발행을 눌러주세요"
+        _goto(d, rpath)
+        rr.click()
+        time.sleep(0.8)
+
+        date_s, time_s = (when.split("T") + [""])[:2]  # "YYYY-MM-DD", "HH:MM"
+        hh, mm = (time_s.split(":") + ["0"])[:2]
+        set_ok = False
+        fpath, fields = _find_in_frames(d, JS_RESERVE_FIELDS)
+        inputs, selects = (fields or [[], []])[0], (fields or [[], []])[1]
+        for el, meta in inputs:
+            try:
+                el.click()
+                time.sleep(0.2)
+                is_time = bool(re.search(r"time|시|분|:", meta, re.I))
+                val = time_s if is_time else date_s
+                _select_all_delete(d)
+                _insert_text(d, val)
+                time.sleep(0.2)
+                set_ok = True
+            except Exception:
+                pass
+        # 시/분 드롭다운(select)이면 옵션 텍스트/값으로 맞춘다 (분은 10분 단위 내림)
+        try:
+            from selenium.webdriver.support.ui import Select
+            mm10 = str(int(mm) // 10 * 10).zfill(2)
+            for k, (el, _meta) in enumerate(selects[:2]):
+                want = [hh, str(int(hh))] if k == 0 else [mm10, str(int(mm10))]
+                sel = Select(el)
+                for o in sel.options:
+                    if o.get_attribute("value") in want or o.text.strip().rstrip("시분") in want:
+                        sel.select_by_visible_text(o.text)
+                        set_ok = True
+                        break
+        except Exception:
+            pass
+        if not set_ok:
+            # 시간 입력칸을 못 다뤘으면 안전하게 멈춤 (엉뚱한 시간 자동발행 방지)
+            notes.append(f"발행:예약시간칸못찾음 in{len(inputs)} sel{len(selects)}")
+            return "예약창을 열고 '예약'을 선택했어요. 시간만 직접 맞추고 발행을 눌러주세요"
+        time.sleep(0.5)
+
+    cpath, cf = _find_in_frames(d, JS_PUBLISH_CONFIRM)
+    if cf is None:
+        notes.append("발행:확정버튼없음")
+        return "발행창은 열렸어요. 마지막 발행 버튼만 직접 눌러주세요"
+    _goto(d, cpath)
+    cf.click()
+    time.sleep(2.5)
+    return "예약됨! 그 시간에 네이버가 자동 발행합니다 (컴퓨터를 꺼도 됩니다)" if mode == "reserve" else "발행 완료!"
+
+
+def _save_draft(d, notes, log):
+    log("임시저장 중…")
+    path, btn = _find_in_frames(d, JS_SAVE_BTN)
+    if btn is None:
+        notes.append("저장:버튼없음")
+        return "저장 버튼을 못 찾았어요 — 크롬 창에서 '저장'을 직접 눌러주세요"
+    _goto(d, path)
+    btn.click()
+    time.sleep(2)
+    return "임시저장 완료! 네이버 '저장 글'에서 확인 후 발행하세요"
+
+
+def post(title, body, image_paths=None, footer_path=None, publish_mode="draft",
+         publish_when="", academy_name="", try_map=False, log=print):
+    """글 한 편을 네이버 글쓰기 화면에 입력하고 임시저장/발행/예약발행한다.
+    publish_mode: 'draft'(임시저장) | 'now'(바로 발행) | 'reserve'(예약 발행)
+    body 규칙은 확장과 동일: [이미지N] 줄 = 사진 자리, [인용] 문장 = 인용구."""
+    image_paths = image_paths or []
+    notes = []
+    d = get_driver()
+    body_path = _open_writer(d, log)
+
+    title_ok = _fill_title(d, body_path, title, notes, log) if title else False
+
+    # 본문을 세그먼트로: 텍스트 / [이미지N] / [인용] (확장 background.js 와 같은 규칙)
+    img_re = re.compile(r"^\[이미지\s*(\d+)\]\s*$")
+    quote_re = re.compile(r"^\[인용\]\s*(.*)$")
+    segs, buf = [], []
+    for raw in (body or "").split("\n"):
+        line = raw.strip()
+        m_img, m_q = img_re.match(line), quote_re.match(line)
+        if m_img:
+            if buf:
+                segs.append(("text", buf)); buf = []
+            segs.append(("img", int(m_img.group(1)) - 1))
+        elif m_q:
+            if buf:
+                segs.append(("text", buf)); buf = []
+            segs.append(("quote", m_q.group(1)))
+        elif line != "":
+            buf.append(line)
+        elif buf and buf[-1] != "":
+            buf.append("")  # 문단 사이 빈 줄 (한 번만)
+    if buf:
+        segs.append(("text", buf))
+
+    log("본문 입력 중… (크롬 창에 실시간으로 써집니다)")
+    img_ok = img_total = 0
+    for kind, val in segs:
+        if kind == "text":
+            for line in val:
+                if line == "":
+                    _enter(d, body_path)
+                    continue
+                if not _type_line(d, body_path, line):
+                    raise RuntimeError("본문이 안 써졌어요. 크롬 창을 새로고침(F5)한 뒤 다시 시도해 주세요.")
+                _enter(d, body_path)
+        elif kind == "quote":
+            log("인용구 넣는 중…")
+            _insert_quote(d, body_path, val, notes)
+        else:
+            if 0 <= val < len(image_paths):
+                img_total += 1
+                log(f"사진 {val + 1} 넣는 중…")
+                if _insert_image(d, body_path, image_paths[val], notes):
+                    img_ok += 1
+
+    # 하단 연락처 배너 (글 맨 끝)
+    if footer_path:
+        log("하단 연락처 배너 넣는 중…")
+        _focus_body_end(d, body_path)
+        _enter(d, body_path)
+        if not _insert_image(d, body_path, footer_path, notes):
+            notes.append("배너:실패")
+        _enter(d, body_path)
+
+    # 지도(장소) 첨부 — 설정에서 켠 경우에만 (실험 기능)
+    map_note = ""
+    if try_map and academy_name:
+        ok = _attach_map(d, body_path, academy_name, notes, log)
+        map_note = "지도 첨부됨 (위치 확인)" if ok else f"지도 자동첨부 실패 — '장소' 버튼에서 '{academy_name}' 직접 검색"
+
+    # 마무리: 발행 방식대로
+    if publish_mode == "draft":
+        pub_note = _save_draft(d, notes, log)
+    else:
+        pub_note = _do_publish(d, "reserve" if publish_mode == "reserve" else "now",
+                               publish_when, notes, log)
+
+    d.switch_to.default_content()
+    result = []
+    result.append("제목·본문 입력 완료" if title_ok else "본문 입력 완료 (제목은 직접 확인해 주세요)")
+    if img_total:
+        result.append(f"사진 {img_ok}/{img_total}장")
+    if map_note:
+        result.append(map_note)
+    result.append(pub_note)
+    if notes:
+        result.append("진단: " + " | ".join(notes[:6]))
+    return "\n".join(result)
