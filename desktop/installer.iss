@@ -1,4 +1,4 @@
-; installer.iss — 설치파일 만들기 (Inno Setup 스크립트)
+﻿; installer.iss — 설치파일 만들기 (Inno Setup 스크립트)
 ; 1) build_exe.bat 를 먼저 실행해 dist\MonsterBlog\ 를 만든 뒤,
 ; 2) Inno Setup(https://jrsoftware.org/isinfo.php 무료)을 설치하고 이 파일을 열어 Compile.
 ; 결과: Output\MonsterBlogSetup.exe — 고객에게 이 파일 하나만 보내면 됨.
