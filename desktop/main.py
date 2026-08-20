@@ -24,7 +24,7 @@ import generate
 import robot
 
 APP_NAME = "몬스터 블로그"
-VERSION = "2.8.0"
+VERSION = "2.9.0"
 
 APP_DIR = Path.home() / ".monster_blog"
 SETTINGS_FILE = APP_DIR / "settings.json"
@@ -83,6 +83,7 @@ class App(ctk.CTk):
         self.f_btn = ctk.CTkFont(family="Malgun Gothic", size=13, weight="bold")
 
         self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(150, self._drain_log)
         if not self.settings["anthropic_api_key"]:
             self.log("⚙️ 먼저 오른쪽 위 [설정]에서 Claude API 키를 저장하세요.")
@@ -120,6 +121,9 @@ class App(ctk.CTk):
         ctk.CTkButton(header, text="⚙️ 설정", width=90, height=34, corner_radius=8,
                       font=self.f_btn, fg_color="#f0f2f5", hover_color="#e3e6ea",
                       text_color=INK, command=self.on_settings).pack(side="right", padx=16)
+        ctk.CTkButton(header, text="📋 기록", width=80, height=34, corner_radius=8,
+                      font=self.f_btn, fg_color="#f0f2f5", hover_color="#e3e6ea",
+                      text_color=INK, command=self.on_open_log).pack(side="right")
 
         # 본문 전체 스크롤 (작은 화면에서도 안 잘림)
         body = ctk.CTkScrollableFrame(self, fg_color="transparent")
@@ -234,7 +238,19 @@ class App(ctk.CTk):
     # ---------- 로그 ----------
 
     def log(self, msg):
-        self.logq.put(str(msg))
+        """진행 상황 칸 + 까만 창 + 로그 파일에 동시에 남긴다."""
+        line = str(msg)
+        self.logq.put(line)
+        try:
+            print(line, flush=True)
+        except Exception:
+            pass
+        try:
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            with open(APP_DIR / "log.txt", "a", encoding="utf-8") as f:
+                f.write(datetime.now().strftime("%H:%M:%S ") + line + "\n")
+        except Exception:
+            pass
 
     def _drain_log(self):
         try:
@@ -385,6 +401,28 @@ class App(ctk.CTk):
             )
             self.log("✅ " + result)
         self._run_bg(work)
+
+    def on_close(self):
+        """창을 닫을 때 크롬도 함께 정리 (프로필 잠금이 남으면 다음에 크롬이 안 켜짐)."""
+        try:
+            robot.close_driver()
+        except Exception:
+            pass
+        self.destroy()
+
+    def on_open_log(self):
+        """진행 기록 파일을 메모장으로 연다 (문제 생겼을 때 그대로 전달하면 됨)."""
+        p = APP_DIR / "log.txt"
+        try:
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            p.touch(exist_ok=True)
+            import subprocess, sys
+            if sys.platform.startswith("win"):
+                subprocess.Popen(["notepad.exe", str(p)])
+            else:
+                subprocess.Popen(["xdg-open", str(p)])
+        except Exception as e:
+            messagebox.showinfo(APP_NAME, f"기록 파일 위치:\n{p}\n\n({e})")
 
     # ---------- 설정 창 ----------
 

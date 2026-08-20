@@ -34,8 +34,12 @@ _driver = None  # 프로그램이 살아있는 동안 크롬 창 하나를 계�
 
 # ---------- 드라이버 ----------
 
-def _make_driver():
+def _make_driver(profile_dir=None):
+    profile_dir = Path(profile_dir or PROFILE_DIR)
     options = webdriver.ChromeOptions()
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--remote-allow-origins=*")
     options.add_argument("--start-maximized")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-dev-shm-usage")
@@ -45,8 +49,8 @@ def _make_driver():
     options.add_experimental_option("useAutomationExtension", False)
     # 광고·추적 스크립트까지 다 기다리면 get() 이 멈춘 것처럼 보인다 → 문서만 준비되면 진행
     options.page_load_strategy = "eager"
-    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    options.add_argument(f"--user-data-dir={PROFILE_DIR}")
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    options.add_argument(f"--user-data-dir={profile_dir}")
     d = webdriver.Chrome(options=options)
     d.set_script_timeout(120)     # 한 글자씩 타이핑하는 비동기 스크립트용
     d.set_page_load_timeout(45)   # 무한 대기 방지
@@ -60,8 +64,23 @@ def _make_driver():
     return d
 
 
-def get_driver():
-    """살아있는 크롬 창을 돌려주고, 죽었으면 새로 띄운다."""
+def _clear_profile_locks(profile_dir):
+    """크롬이 비정상 종료되면 남는 잠금 파일들. 이게 남아 있으면 크롬이 바로 꺼진다."""
+    removed = 0
+    for name in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
+        p = Path(profile_dir) / name
+        try:
+            if p.exists() or p.is_symlink():
+                p.unlink()
+                removed += 1
+        except Exception:
+            pass
+    return removed
+
+
+def get_driver(log=None):
+    """살아있는 크롬 창을 돌려주고, 죽었으면 새로 띄운다.
+    'Chrome instance exited' 는 대개 프로필 잠금 때문 → 잠금 정리 후 재시도, 그래도 안 되면 새 프로필."""
     global _driver
     if _driver is not None:
         try:
@@ -69,8 +88,40 @@ def get_driver():
             return _driver
         except Exception:
             _driver = None
-    _driver = _make_driver()
-    return _driver
+
+    def say(m):
+        if log:
+            log(m)
+
+    # 1차: 전용 프로필 그대로
+    try:
+        _driver = _make_driver()
+        return _driver
+    except Exception as e:
+        say(f"   크롬이 바로 종료됨({type(e).__name__}) — 잠금 파일을 정리하고 다시 시도합니다")
+
+    # 2차: 잠금 파일 정리 후 같은 프로필로 재시도 (로그인 상태 유지)
+    try:
+        n = _clear_profile_locks(PROFILE_DIR)
+        say(f"   잠금 파일 {n}개 정리 후 재시도…")
+        time.sleep(1)
+        _driver = _make_driver()
+        return _driver
+    except Exception:
+        say("   여전히 안 되어 새 프로필로 시작합니다 (네이버 로그인을 다시 해야 합니다)")
+
+    # 3차: 새 프로필 (로그인 세션은 잃지만 최소한 동작은 한다)
+    alt = PROFILE_DIR.parent / ("chrome_profile_" + str(int(time.time())))
+    try:
+        _driver = _make_driver(alt)
+        return _driver
+    except Exception as e:
+        raise RuntimeError(
+            "크롬을 시작하지 못했습니다.\n"
+            "1) 열려 있는 크롬 창을 모두 닫고 다시 시도해 주세요\n"
+            "2) 그래도 안 되면 컴퓨터를 재시작해 주세요\n"
+            f"(원인: {type(e).__name__})"
+        )
 
 
 def close_driver():
@@ -145,7 +196,8 @@ def ensure_login(naver_id, naver_pw, log=print, manual_wait=300):
     네이버가 자동 로그인을 막으므로 실패하면 사람이 크롬 창에서 직접 끝내도록 기다린다.
     (한 번만 직접 로그인하면 전용 크롬 프로필에 저장돼 다음부터는 자동으로 통과된다.)"""
     log("크롬을 켜는 중…")
-    d = get_driver()
+    d = get_driver(log)
+    log("크롬 준비 완료")
     log("네이버 접속 중…")
     if _logged_in(d, log):
         log("✓ 이미 로그인되어 있습니다 (저장된 세션 사용)")
@@ -1346,7 +1398,7 @@ def post(title, body, image_paths=None, footer_path=None, publish_mode="draft",
     body 규칙은 확장과 동일: [이미지N] 줄 = 사진 자리, [인용] 문장 = 인용구."""
     image_paths = image_paths or []
     notes = []
-    d = get_driver()
+    d = get_driver(log)
     paths = _open_writer(d, log)          # 본문칸이 있는 '모든' 후보 프레임
     state = {}                            # 실제로 먹히는 (프레임, 입력방식) 기억
 
