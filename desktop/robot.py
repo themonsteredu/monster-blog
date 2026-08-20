@@ -55,6 +55,10 @@ def _make_driver(profile_dir=None):
     d.set_script_timeout(120)     # 한 글자씩 타이핑하는 비동기 스크립트용
     d.set_page_load_timeout(45)   # 무한 대기 방지
     try:
+        d.set_window_size(1500, 1000)   # 창이 좁으면 에디터가 좁게 그려져 못 찾는다
+    except Exception:
+        pass
+    try:
         d.execute_cdp_cmd(
             "Page.addScriptToEvaluateOnNewDocument",
             {"source": "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"},
@@ -304,7 +308,8 @@ if (!b) return false;
 const r = b.getBoundingClientRect();
 const st = window.getComputedStyle(b);
 if (st.visibility === 'hidden' || st.display === 'none') return false;
-return r.width > 0 && r.height > 0;
+// 진짜 본문 편집칸은 넓다. 좁은 것(예: 17px)은 네이버가 쓰는 보조/가짜 편집칸이다.
+return r.width >= 300 && r.height >= 100;
 """
 
 JS_FOCUS_BODY_END = """
@@ -857,17 +862,17 @@ def _open_writer(d, log):
     log("글쓰기 화면으로 이동 중…")
     _go(d, BLOG_WRITE, log)
     time.sleep(4)
-    # '보이는' 본문칸이 있는 프레임을 먼저 찾고(최대 20초), 하나도 없으면 느슨한 기준으로
+    # 에디터는 iframe 안에서 늦게 뜬다. '충분히 큰 진짜 편집칸'이 나올 때까지 기다린다.
     body_paths = []
-    for _ in range(10):
+    end = time.time() + 40
+    while time.time() < end:
         body_paths = _find_all_frames(d, JS_HAS_BODY)
         if body_paths:
             break
-        time.sleep(2)
+        time.sleep(1.5)
     if not body_paths:
+        log("⚠ 넓은 본문칸을 못 찾아 예비 기준으로 진행합니다")
         body_paths = _find_all_frames(d, JS_HAS_BODY_LOOSE)
-        if body_paths:
-            log("⚠ 보이는 본문칸을 못 찾아 예비 기준으로 진행합니다")
     if not body_paths:
         raise RuntimeError("글쓰기 화면(본문칸)을 찾지 못했습니다. 네이버에 로그인돼 있는지 확인하세요.")
     log(f"본문칸 프레임 {len(body_paths)}개 발견")
