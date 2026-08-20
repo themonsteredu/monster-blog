@@ -114,10 +114,14 @@ def get_driver(log=None):
     except Exception:
         say("   여전히 안 되어 새 프로필로 시작합니다 (네이버 로그인을 다시 해야 합니다)")
 
-    # 3차: 새 프로필 (로그인 세션은 잃지만 최소한 동작은 한다)
-    alt = PROFILE_DIR.parent / ("chrome_profile_" + str(int(time.time())))
+    # 3차: 망가진 프로필을 통째로 지우고 '같은 경로'로 다시 만든다.
+    #      (매번 새 경로를 쓰면 로그인이 계속 초기화된다)
     try:
-        _driver = _make_driver(alt)
+        import shutil
+        shutil.rmtree(PROFILE_DIR, ignore_errors=True)
+        say("   프로필을 초기화했습니다 — 네이버 로그인을 다시 해주세요")
+        time.sleep(1)
+        _driver = _make_driver()
         return _driver
     except Exception as e:
         raise RuntimeError(
@@ -175,10 +179,13 @@ def _logged_in(d, log=None):
     try:
         _go(d, NAVER_HOME, log)
         time.sleep(2)
+        # 확실한 근거만 사용: '로그아웃' 글자 또는 로그아웃 링크
         if d.find_elements(By.XPATH, "//*[contains(text(),'로그아웃')]"):
             return True
-        # 메인 화면 구조가 바뀌어도 잡히도록: 내 정보/알림 영역
-        return bool(d.find_elements(By.CSS_SELECTOR, ".MyView-module__link_login___HpHMW ~ *, .link_logout, a[href*='nid.naver.com/nidlogin.logout']"))
+        if d.find_elements(By.CSS_SELECTOR, "a[href*='nidlogin.logout'], a[href*='nid.naver.com/nidlogin.logout']"):
+            return True
+        # 반대 근거: 'NAVER 로그인' 버튼이 보이면 로그아웃 상태
+        return False
     except Exception:
         return False
 
@@ -862,6 +869,16 @@ def _open_writer(d, log):
     log("글쓰기 화면으로 이동 중…")
     _go(d, BLOG_WRITE, log)
     time.sleep(4)
+    # 로그인이 풀렸으면 네이버가 에디터 대신 로그인 화면을 준다 → 여기서 분명히 알린다
+    try:
+        url = d.current_url or ""
+    except Exception:
+        url = ""
+    if "nid.naver.com" in url or "login" in url.lower():
+        raise RuntimeError(
+            "네이버 로그인이 안 되어 있습니다.\n"
+            "크롬 창에서 직접 로그인한 뒤 다시 [네이버에 올리기]를 눌러주세요."
+        )
     # 에디터는 iframe 안에서 늦게 뜬다. '충분히 큰 진짜 편집칸'이 나올 때까지 기다린다.
     body_paths = []
     end = time.time() + 40
