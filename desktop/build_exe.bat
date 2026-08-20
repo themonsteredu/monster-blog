@@ -44,10 +44,16 @@ python -m pip install --upgrade --force-reinstall pywin32-ctypes
 
 echo [3/4] Building exe... this takes a few minutes, please wait...
 rem --collect-all: selenium/customtkinter load parts lazily, PyInstaller misses them otherwise
-python -m PyInstaller --noconfirm --clean --windowed --name MonsterBlog --collect-all selenium --collect-all anthropic --collect-all customtkinter main.py
+rem Full output goes to build_log.txt so the error can be read afterwards.
+python -m PyInstaller --noconfirm --clean --windowed --name MonsterBlog --collect-all selenium --collect-all anthropic --collect-all customtkinter main.py > build_log.txt 2>&1
 if errorlevel 1 (
   echo.
-  echo ERROR: build failed. Scroll up to the FIRST red line and send it over.
+  echo ===== BUILD FAILED - last 25 lines =====
+  powershell -NoProfile -Command "Get-Content build_log.txt -Tail 25"
+  echo ========================================
+  echo Full log saved to: %~dp0build_log.txt
+  echo.
+  echo TIP: you do NOT need the exe to test. Just run:   python main.py
   pause
   exit /b 1
 )
