@@ -116,15 +116,21 @@ def ensure_login(naver_id, naver_pw, log=print, manual_wait=240):
     time.sleep(2)
     if naver_id and naver_pw:
         try:
-            # .value 직접 대입은 네이버가 감지하므로, 진짜 입력 경로(insertText)로 넣는다
-            d.find_element(By.CSS_SELECTOR, "#id").click()
+            # 셀레늄 기본 타이핑(send_keys)이 가장 확실하다. 안 되면 CDP insertText 로 보강.
+            eid = d.find_element(By.CSS_SELECTOR, "#id")
+            eid.click(); time.sleep(0.2)
+            eid.send_keys(naver_id)
+            if not (eid.get_attribute("value") or ""):
+                _insert_text(d, naver_id)
             time.sleep(0.3)
-            _insert_text(d, naver_id)
+            epw = d.find_element(By.CSS_SELECTOR, "#pw")
+            epw.click(); time.sleep(0.2)
+            epw.send_keys(naver_pw)
+            if not (epw.get_attribute("value") or ""):
+                _insert_text(d, naver_pw)
             time.sleep(0.3)
-            d.find_element(By.CSS_SELECTOR, "#pw").click()
-            time.sleep(0.3)
-            _insert_text(d, naver_pw)
-            time.sleep(0.3)
+            if not (eid.get_attribute("value") or ""):
+                log("⚠ 아이디 입력이 안 됩니다 — 크롬 창에서 직접 로그인해 주세요.")
             d.find_element(By.CSS_SELECTOR, "[id='log.login'], .btn_login").click()
             time.sleep(3)
         except Exception as e:
@@ -154,18 +160,28 @@ JS_HAS_BODY = """
 function __vb(){
   const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
     || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
-  const c = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => {
-    if (isTitle(e)) return false;
+  const all = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e));
+  if (!all.length) return null;
+  const vis = e => {
     const r = e.getBoundingClientRect();
-    if (r.width < 100 || r.height < 15) return false;          // 크기 0 = 안 보이는 가짜
+    if (r.width <= 0 || r.height <= 0) return false;
     const st = window.getComputedStyle(e);
-    if (st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0) return false;
-    return true;
-  });
-  c.sort((a,b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height);
-  return c[0] || null;
+    return !(st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0);
+  };
+  const area = e => { const r = e.getBoundingClientRect(); return r.width * r.height; };
+  const shown = all.filter(vis);
+  const pool = shown.length ? shown : all;     // 보이는 게 없으면 최후수단으로 전체
+  pool.sort((a, b) => area(b) - area(a));
+  return pool[0];
 }
-return !!__vb();"""
+
+const b = __vb();
+if (!b) return false;
+const r = b.getBoundingClientRect();
+const st = window.getComputedStyle(b);
+if (st.visibility === 'hidden' || st.display === 'none') return false;
+return r.width > 0 && r.height > 0;
+"""
 
 JS_FOCUS_BODY_END = """
 function __vb(){
@@ -251,20 +267,90 @@ return { res: document.querySelectorAll('.se-image-resource').length,
          img: document.querySelectorAll('img').length };
 """
 
+JS_HAS_BODY_LOOSE = """
+function __vb(){
+  const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+    || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+  const all = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e));
+  if (!all.length) return null;
+  const vis = e => {
+    const r = e.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    const st = window.getComputedStyle(e);
+    return !(st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0);
+  };
+  const area = e => { const r = e.getBoundingClientRect(); return r.width * r.height; };
+  const shown = all.filter(vis);
+  const pool = shown.length ? shown : all;     // 보이는 게 없으면 최후수단으로 전체
+  pool.sort((a, b) => area(b) - area(a));
+  return pool[0];
+}
+return !!__vb();"""
+
+
+JS_CLICK_TARGET = """
+function __vb(){
+  const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+    || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+  const all = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e));
+  if (!all.length) return null;
+  const vis = e => {
+    const r = e.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    const st = window.getComputedStyle(e);
+    return !(st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0);
+  };
+  const area = e => { const r = e.getBoundingClientRect(); return r.width * r.height; };
+  const shown = all.filter(vis);
+  const pool = shown.length ? shown : all;     // 보이는 게 없으면 최후수단으로 전체
+  pool.sort((a, b) => area(b) - area(a));
+  return pool[0];
+}
+
+const b = __vb();
+if (!b) return null;
+const ps = b.querySelectorAll('.se-text-paragraph, p');
+for (let i = ps.length - 1; i >= 0; i--) {
+  const r = ps[i].getBoundingClientRect();
+  if (r.width > 0 && r.height > 0) return ps[i];
+}
+return b;
+"""
+
+
+JS_DIAG = """
+const out = [];
+document.querySelectorAll('[contenteditable="true"]').forEach(e => {
+  const r = e.getBoundingClientRect();
+  const st = window.getComputedStyle(e);
+  const cls = String(e.className || '').trim().split(/\s+/)[0] || '';
+  out.push(e.tagName + '.' + cls.slice(0, 22)
+    + ' ' + Math.round(r.width) + 'x' + Math.round(r.height)
+    + (st.visibility === 'hidden' ? ' HID' : '')
+    + (st.display === 'none' ? ' NONE' : '')
+    + ((e.getAttribute('data-placeholder') || e.getAttribute('placeholder')) ? ' ph=' + (e.getAttribute('data-placeholder') || e.getAttribute('placeholder')).slice(0, 6) : ''));
+});
+return out.length ? out.join(' / ') : '(편집칸없음)';
+"""
+
+
 JS_FIND_BODY = """
 function __vb(){
   const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
     || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
-  const c = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => {
-    if (isTitle(e)) return false;
+  const all = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e));
+  if (!all.length) return null;
+  const vis = e => {
     const r = e.getBoundingClientRect();
-    if (r.width < 100 || r.height < 15) return false;          // 크기 0 = 안 보이는 가짜
+    if (r.width <= 0 || r.height <= 0) return false;
     const st = window.getComputedStyle(e);
-    if (st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0) return false;
-    return true;
-  });
-  c.sort((a,b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height);
-  return c[0] || null;
+    return !(st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0);
+  };
+  const area = e => { const r = e.getBoundingClientRect(); return r.width * r.height; };
+  const shown = all.filter(vis);
+  const pool = shown.length ? shown : all;     // 보이는 게 없으면 최후수단으로 전체
+  pool.sort((a, b) => area(b) - area(a));
+  return pool[0];
 }
 return __vb();"""
 
@@ -646,7 +732,7 @@ def _find_all_frames(d, js, *args):
 def _open_writer(d, log):
     d.get(BLOG_WRITE)
     time.sleep(4)
-    # 본문 편집칸이 있는 '모든' 프레임 찾기 (최대 20초)
+    # '보이는' 본문칸이 있는 프레임을 먼저 찾고(최대 20초), 하나도 없으면 느슨한 기준으로
     body_paths = []
     for _ in range(10):
         body_paths = _find_all_frames(d, JS_HAS_BODY)
@@ -654,8 +740,19 @@ def _open_writer(d, log):
             break
         time.sleep(2)
     if not body_paths:
+        body_paths = _find_all_frames(d, JS_HAS_BODY_LOOSE)
+        if body_paths:
+            log("⚠ 보이는 본문칸을 못 찾아 예비 기준으로 진행합니다")
+    if not body_paths:
         raise RuntimeError("글쓰기 화면(본문칸)을 찾지 못했습니다. 네이버에 로그인돼 있는지 확인하세요.")
-    log(f"보이는 본문칸이 있는 프레임 {len(body_paths)}개 발견")
+    log(f"본문칸 프레임 {len(body_paths)}개 발견")
+    # 화면 구조를 한 번 기록 (문제 생겼을 때 원인 파악용)
+    try:
+        for i, p in enumerate(body_paths):
+            _goto(d, p)
+            log(f"  f{i}: {d.execute_script(JS_DIAG)}")
+    except Exception:
+        pass
     # 방해 팝업 닫기 ("작성 중인 글", 도움말 등) — 모든 프레임에서. 팝업이 남아있으면
     # 제목 클릭이 가로막혀 제목 입력이 실패한다.
     for path in _frame_paths(d):
@@ -681,12 +778,22 @@ def _fill_title(d, body_path, title, notes, log):
     if el is None:
         notes.append("title:제목칸못찾음")
         return False
-    # 1차: 진짜 클릭으로 포커스 → trusted insertText (포커스 판정은 참고만)
+    # 1차: 셀레늄 기본 타이핑 (가장 확실)
     try:
         el.click()
+        time.sleep(0.3)
+        el.send_keys(title)
         time.sleep(0.4)
-        if not d.execute_script(JS_TITLE_FOCUSED):
-            notes.append("title:포커스확인안됨(그래도시도)")
+        if d.execute_script(JS_CHECK_TITLE, title[:5]):
+            return True
+        notes.append("title:send_keys무반응")
+    except Exception as e:
+        notes.append(f"title:keys {type(e).__name__}")
+    # 2차: 진짜 클릭 + trusted insertText
+    try:
+        _goto(d, path)
+        el.click()
+        time.sleep(0.3)
         _insert_text(d, title)
         time.sleep(0.4)
         if d.execute_script(JS_CHECK_TITLE, title[:5]):
@@ -694,7 +801,7 @@ def _fill_title(d, body_path, title, notes, log):
         notes.append("title:insertText무반응")
     except Exception as e:
         notes.append(f"title:{type(e).__name__}")
-    # 2차: 클릭된 상태에서 클립보드 + 진짜 Ctrl+V
+    # 3차: 클릭된 상태에서 클립보드 + 진짜 Ctrl+V
     try:
         _goto(d, path)
         if _clip_text(d, title):
@@ -708,7 +815,7 @@ def _fill_title(d, body_path, title, notes, log):
             notes.append("title:붙여넣기무반응")
     except Exception as e:
         notes.append(f"title:붙여넣기 {type(e).__name__}")
-    # 3차 예비: 제목칸에 직접 넣기 (확장 typeTitleFallback 과 동일)
+    # 4차 예비: 제목칸에 직접 넣기 (확장 typeTitleFallback 과 동일)
     try:
         _goto(d, path)
         ok = bool(d.execute_script(JS_TITLE_FALLBACK, title))
@@ -799,7 +906,25 @@ def _clip_text(d, text):
 
 def _try_type_once(d, path, text, method):
     """한 프레임에 한 방식으로 입력 시도 (성공 여부는 밖에서 글자수로 판정)."""
-    if method == "cdp":
+    if method == "keys":
+        # 셀레늄 기본 타이핑 — 브라우저 입장에서 가장 '사람다운' 입력
+        _goto(d, path)
+        el = d.execute_script(JS_CLICK_TARGET) or d.execute_script(JS_FIND_BODY)
+        if el is None:
+            return False
+        try:
+            el.click()
+        except Exception:
+            d.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+            time.sleep(0.2)
+            el.click()
+        time.sleep(0.15)
+        el.send_keys(text)
+    elif method == "chain":
+        # 클릭 후 키보드로 직접 (커서가 잡힌 곳에 그대로)
+        _cursor_body_end(d, path)
+        ActionChains(d).send_keys(text).perform()
+    elif method == "cdp":
         _cursor_body_end(d, path)
         _insert_text(d, text)
     elif method == "js":
@@ -823,7 +948,7 @@ def _type_text(d, paths, text, notes, state):
     combos = []
     if state.get("path") and state.get("best"):
         combos.append((state["path"], state["best"]))
-    for m in ("cdp", "js", "paste"):
+    for m in ("keys", "chain", "cdp", "js", "paste"):
         for p in paths:
             if (p, m) not in combos:
                 combos.append((p, m))
@@ -842,6 +967,12 @@ def _type_text(d, paths, text, notes, state):
         except Exception as e:
             notes.append(f"type-{method}:{type(e).__name__}")
     notes.append("입력실패: 모든 프레임·방식 무반응")
+    try:
+        for i, p in enumerate(paths):
+            _goto(d, p)
+            notes.append(f"진단f{i}: {d.execute_script(JS_DIAG)}")
+    except Exception:
+        pass
     return False
 
 
@@ -970,11 +1101,18 @@ def _insert_quote(d, paths, text, notes, state):
             # 커서가 새 빈 박스 안 → 그 자리에 입력하고 '실제로 들어갔는지' 확인
             # 1차: trusted insertText (박스를 진짜 클릭으로 만들었으니 포커스가 박스 안)
             _goto(d, body_path)
-            _insert_text(d, text)
+            try:
+                ActionChains(d).send_keys(text).perform()
+            except Exception:
+                pass
             time.sleep(0.25)
             if int(d.execute_script(JS_QUOTE_LASTLEN)) > 0:
                 applied = True
             else:
+                _insert_text(d, text)
+                time.sleep(0.25)
+                applied = int(d.execute_script(JS_QUOTE_LASTLEN)) > 0
+            if not applied:
                 # 2차: 에디터 안 execCommand 타이핑
                 d.execute_async_script(JS_TYPE_HERE, text)
                 time.sleep(0.25)
