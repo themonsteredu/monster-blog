@@ -24,7 +24,7 @@ import generate
 import robot
 
 APP_NAME = "몬스터 블로그"
-VERSION = "2.7.0"
+VERSION = "2.8.0"
 
 APP_DIR = Path.home() / ".monster_blog"
 SETTINGS_FILE = APP_DIR / "settings.json"

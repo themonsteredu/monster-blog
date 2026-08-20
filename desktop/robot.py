@@ -43,10 +43,13 @@ def _make_driver():
     options.add_argument("--no-default-browser-check")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
+    # 광고·추적 스크립트까지 다 기다리면 get() 이 멈춘 것처럼 보인다 → 문서만 준비되면 진행
+    options.page_load_strategy = "eager"
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     options.add_argument(f"--user-data-dir={PROFILE_DIR}")
     d = webdriver.Chrome(options=options)
-    d.set_script_timeout(120)  # 한 글자씩 타이핑하는 비동기 스크립트용
+    d.set_script_timeout(120)     # 한 글자씩 타이핑하는 비동기 스크립트용
+    d.set_page_load_timeout(45)   # 무한 대기 방지
     try:
         d.execute_cdp_cmd(
             "Page.addScriptToEvaluateOnNewDocument",
@@ -80,6 +83,20 @@ def close_driver():
         _driver = None
 
 
+def _go(d, url, log=None):
+    """페이지 이동. 로딩이 오래 걸려도 멈추지 않고 넘어간다."""
+    try:
+        d.get(url)
+    except Exception as e:
+        if log:
+            log(f"   (로딩이 길어 그대로 진행합니다: {type(e).__name__})")
+        try:
+            d.execute_script("window.stop();")
+        except Exception:
+            pass
+    return True
+
+
 def _insert_text(d, text):
     """현재 포커스 위치에 trusted 텍스트 입력 (한글 완벽 지원 — 확장과 같은 CDP 방식)."""
     d.execute_cdp_cmd("Input.insertText", {"text": text})
@@ -98,10 +115,10 @@ def _select_all_delete(d):
 
 # ---------- 로그인 ----------
 
-def _logged_in(d):
+def _logged_in(d, log=None):
     """네이버 메인에서 로그인 상태인지 판별."""
     try:
-        d.get(NAVER_HOME)
+        _go(d, NAVER_HOME, log)
         time.sleep(2)
         if d.find_elements(By.XPATH, "//*[contains(text(),'로그아웃')]"):
             return True
@@ -127,13 +144,15 @@ def ensure_login(naver_id, naver_pw, log=print, manual_wait=300):
     """세션이 남아있으면 그냥 통과. 아니면 아이디/비번 자동 입력을 시도하되,
     네이버가 자동 로그인을 막으므로 실패하면 사람이 크롬 창에서 직접 끝내도록 기다린다.
     (한 번만 직접 로그인하면 전용 크롬 프로필에 저장돼 다음부터는 자동으로 통과된다.)"""
+    log("크롬을 켜는 중…")
     d = get_driver()
-    if _logged_in(d):
+    log("네이버 접속 중…")
+    if _logged_in(d, log):
         log("✓ 이미 로그인되어 있습니다 (저장된 세션 사용)")
         return True
 
     log("네이버 로그인 화면을 엽니다…")
-    d.get(NAVER_LOGIN)
+    _go(d, NAVER_LOGIN, log)
     time.sleep(2)
     _bring_front(d)
 
@@ -190,7 +209,7 @@ def ensure_login(naver_id, naver_pw, log=print, manual_wait=300):
         try:
             if "nid.naver.com" not in d.current_url:
                 time.sleep(1)
-                if _logged_in(d):
+                if _logged_in(d, log):
                     log("✓ 로그인 완료! 다음부터는 이 단계를 건너뜁니다.")
                     return True
         except Exception:
@@ -783,7 +802,8 @@ def _find_all_frames(d, js, *args):
 # ---------- 글쓰기 ----------
 
 def _open_writer(d, log):
-    d.get(BLOG_WRITE)
+    log("글쓰기 화면으로 이동 중…")
+    _go(d, BLOG_WRITE, log)
     time.sleep(4)
     # '보이는' 본문칸이 있는 프레임을 먼저 찾고(최대 20초), 하나도 없으면 느슨한 기준으로
     body_paths = []
