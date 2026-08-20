@@ -490,20 +490,36 @@ def _find_in_frames(d, js, *args):
     return None, None
 
 
+def _find_all_frames(d, js, *args):
+    """js 가 참을 내는 '모든' 프레임 경로 목록. (본문 편집칸이 여러 프레임에
+    있을 수 있고, 그중 보이지 않는 가짜가 섞여 있어 하나만 고르면 조용히 실패한다.
+    확장프로그램이 '모든 프레임에 뿌리는' 방식을 쓰는 이유가 이것.)"""
+    out = []
+    for path in _frame_paths(d):
+        try:
+            _goto(d, path)
+            if d.execute_script(js, *args):
+                out.append(path)
+        except Exception:
+            continue
+    return out
+
+
 # ---------- 글쓰기 ----------
 
 def _open_writer(d, log):
     d.get(BLOG_WRITE)
     time.sleep(4)
-    # 본문 편집칸이 있는 프레임 찾기 (최대 20초)
-    body_path = None
+    # 본문 편집칸이 있는 '모든' 프레임 찾기 (최대 20초)
+    body_paths = []
     for _ in range(10):
-        body_path, ok = _find_in_frames(d, JS_HAS_BODY)
-        if ok:
+        body_paths = _find_all_frames(d, JS_HAS_BODY)
+        if body_paths:
             break
         time.sleep(2)
-    if body_path is None:
+    if not body_paths:
         raise RuntimeError("글쓰기 화면(본문칸)을 찾지 못했습니다. 네이버에 로그인돼 있는지 확인하세요.")
+    log(f"본문 후보 프레임 {len(body_paths)}개 발견")
     # 방해 팝업 닫기 ("작성 중인 글", 도움말 등) — 모든 프레임에서. 팝업이 남아있으면
     # 제목 클릭이 가로막혀 제목 입력이 실패한다.
     for path in _frame_paths(d):
@@ -518,9 +534,9 @@ def _open_writer(d, log):
                         pass
         except Exception:
             pass
-    _goto(d, body_path)
+    _goto(d, body_paths[0])
     log("글쓰기 화면 준비 완료")
-    return body_path
+    return body_paths
 
 
 def _fill_title(d, body_path, title, notes, log):
@@ -612,6 +628,21 @@ def _body_len(d, body_path):
         return -1
 
 
+def _body_len_all(d, paths):
+    """후보 프레임 전체의 본문 글자수 합. 어느 프레임에 들어가든 '늘어남'을 잡아낸다."""
+    total = 0
+    for p in paths:
+        n = _body_len(d, p)
+        if n > 0:
+            total += n
+    return total
+
+
+def _cur_path(state, paths):
+    """지금까지 입력에 성공한 프레임(없으면 첫 후보)."""
+    return state.get("path") or paths[0]
+
+
 def _clip_text(d, text):
     """시스템 클립보드에 텍스트를 올린다 (페이지 쪽 API 이용)."""
     try:
@@ -626,38 +657,51 @@ def _clip_text(d, text):
     return (w.get("result") or {}).get("value") == "ok"
 
 
-def _type_text(d, body_path, text, notes, state):
-    """본문 끝에 텍스트 한 덩이 입력 — 3가지 방식을 순서대로 시도하고,
-    '실제로 글자가 들어갔는지' 확인해서 성공한 방식을 기억해 다음부터 그것만 쓴다.
-    A) 진짜 클릭 + trusted insertText  B) 에디터 안 execCommand 타이핑  C) 클립보드 + 진짜 Ctrl+V"""
-    order = []
-    if state.get("best"):
-        order.append(state["best"])
-    order += [m for m in ("cdp", "js", "paste") if m not in order]
-    for m in order:
-        before = _body_len(d, body_path)
+def _try_type_once(d, path, text, method):
+    """한 프레임에 한 방식으로 입력 시도 (성공 여부는 밖에서 글자수로 판정)."""
+    if method == "cdp":
+        _cursor_body_end(d, path)
+        _insert_text(d, text)
+    elif method == "js":
+        _goto(d, path)
+        d.execute_async_script(JS_TYPE_LINE, text)
+    else:  # paste
+        if not _clip_text(d, text):
+            return False
+        _cursor_body_end(d, path)
+        ActionChains(d).key_down(Keys.CONTROL).send_keys("v").key_up(Keys.CONTROL).perform()
+    return True
+
+
+def _type_text(d, paths, text, notes, state):
+    """본문 끝에 텍스트 한 덩이 입력.
+    '어느 프레임 × 어느 방식'이 실제로 먹히는지 한 번 찾아내고, 그 조합을 계속 쓴다.
+    (네이버 화면엔 보이지 않는 가짜 편집칸이 섞여 있어 프레임을 하나만 골라 쓰면
+     아무 반응 없이 실패한다 — 확장프로그램이 '모든 프레임에 뿌리는' 이유.)
+    방식: cdp = 진짜 클릭+insertText / js = 에디터 안 타이핑 / paste = 클립보드+Ctrl+V"""
+    # 이미 찾은 조합이 있으면 그것부터
+    combos = []
+    if state.get("path") and state.get("best"):
+        combos.append((state["path"], state["best"]))
+    for m in ("cdp", "js", "paste"):
+        for p in paths:
+            if (p, m) not in combos:
+                combos.append((p, m))
+
+    for path, method in combos:
+        before = _body_len_all(d, paths)
         try:
-            if m == "cdp":
-                _cursor_body_end(d, body_path)
-                _insert_text(d, text)
-            elif m == "js":
-                _goto(d, body_path)
-                d.execute_async_script(JS_TYPE_LINE, text)
-            else:
-                if not _clip_text(d, text):
-                    notes.append("type-paste:클립보드실패")
-                    continue
-                _cursor_body_end(d, body_path)
-                ActionChains(d).key_down(Keys.CONTROL).send_keys("v").key_up(Keys.CONTROL).perform()
-            time.sleep(0.2)
-            if _body_len(d, body_path) > before:
-                if state.get("best") != m:
-                    state["best"] = m
-                    notes.append("입력방식:" + m)
+            if not _try_type_once(d, path, text, method):
+                continue
+            time.sleep(0.25)
+            if _body_len_all(d, paths) > before:
+                if state.get("best") != method or state.get("path") != path:
+                    state["best"], state["path"] = method, path
+                    notes.append(f"입력성공: 프레임{path} 방식{method}")
                 return True
-            notes.append(f"type-{m}:무반응")
         except Exception as e:
-            notes.append(f"type-{m}:{type(e).__name__}")
+            notes.append(f"type-{method}:{type(e).__name__}")
+    notes.append("입력실패: 모든 프레임·방식 무반응")
     return False
 
 
@@ -755,8 +799,9 @@ def _insert_image(d, body_path, image_path, notes):
     return False
 
 
-def _insert_quote(d, body_path, text, notes, state):
+def _insert_quote(d, paths, text, notes, state):
     """인용구 박스(세로줄 우선)를 만들고 그 안에 문장을 넣는다. 실패하면 일반 문단으로."""
+    body_path = _cur_path(state, paths)
     _cursor_body_end(d, body_path)
     _enter(d, body_path)  # 인용 앞 여백
     applied = False
@@ -764,7 +809,7 @@ def _insert_quote(d, body_path, text, notes, state):
         path, pair = _find_in_frames(d, JS_QUOTE_BTN)
         if pair:
             btn, arrow = pair[0], pair[1]
-            _focus_body_end(d, body_path)
+            _cursor_body_end(d, body_path)
             _goto(d, path)
             opened = False
             if arrow is not None:
@@ -812,8 +857,8 @@ def _insert_quote(d, body_path, text, notes, state):
     except Exception as e:
         notes.append(f"인용:{e}")
     if not applied:
-        _type_text(d, body_path, text, notes, state)  # 문장을 일반 문단으로라도 남긴다
-    _enter(d, body_path)
+        _type_text(d, paths, text, notes, state)  # 문장을 일반 문단으로라도 남긴다
+    _enter(d, _cur_path(state, paths))
     return applied
 
 
@@ -951,14 +996,15 @@ def post(title, body, image_paths=None, footer_path=None, publish_mode="draft",
     image_paths = image_paths or []
     notes = []
     d = get_driver()
-    body_path = _open_writer(d, log)
+    paths = _open_writer(d, log)          # 본문칸이 있는 '모든' 후보 프레임
+    state = {}                            # 실제로 먹히는 (프레임, 입력방식) 기억
 
     # 크롬 창을 앞으로 — 창이 뒤에 있으면 에디터가 키 입력을 무시할 수 있다
     _bring_front(d)
     log("⚠ 입력이 끝날 때까지 크롬 창과 마우스·키보드를 건드리지 마세요!")
     time.sleep(0.5)
 
-    title_ok = _fill_title(d, body_path, title, notes, log) if title else False
+    title_ok = _fill_title(d, paths[0], title, notes, log) if title else False
 
     # 본문을 세그먼트로: 텍스트 / [이미지N] / [인용] (확장 background.js 와 같은 규칙)
     img_re = re.compile(r"^\[이미지\s*(\d+)\]\s*$")
@@ -984,44 +1030,44 @@ def post(title, body, image_paths=None, footer_path=None, publish_mode="draft",
 
     log("본문 입력 중… (크롬 창에 실시간으로 써집니다)")
     img_ok = img_total = 0
-    state = {}  # 성공한 입력 방식 기억 (cdp / js / paste)
-    _cursor_body_end(d, body_path)
+    _cursor_body_end(d, paths[0])
     for kind, val in segs:
         if kind == "text":
             for line in val:
                 if line == "":
-                    _enter(d, body_path)
+                    _enter(d, _cur_path(state, paths))
                     continue
-                if not _type_text(d, body_path, line, notes, state):
+                if not _type_text(d, paths, line, notes, state):
                     raise RuntimeError(
                         "본문이 안 써졌어요. 크롬 창을 건드리지 말고 다시 시도해 주세요.\n"
                         "진단: " + " | ".join(notes[-6:]))
-                _enter(d, body_path)
+                _enter(d, _cur_path(state, paths))
         elif kind == "quote":
             log("인용구 넣는 중…")
-            _insert_quote(d, body_path, val, notes, state)
+            _insert_quote(d, paths, val, notes, state)
         else:
             if 0 <= val < len(image_paths):
                 img_total += 1
                 log(f"사진 {val + 1} 넣는 중…")
-                if _insert_image(d, body_path, image_paths[val], notes):
+                if _insert_image(d, _cur_path(state, paths), image_paths[val], notes):
                     img_ok += 1
-                _cursor_body_end(d, body_path)  # 이미지 뒤에 커서 복귀
+                _cursor_body_end(d, _cur_path(state, paths))  # 이미지 뒤 커서 복귀
 
     # 하단 연락처 배너 (글 맨 끝)
     if footer_path:
         log("하단 연락처 배너 넣는 중…")
-        _cursor_body_end(d, body_path)
-        _enter(d, body_path)
-        if not _insert_image(d, body_path, footer_path, notes):
+        bp = _cur_path(state, paths)
+        _cursor_body_end(d, bp)
+        _enter(d, bp)
+        if not _insert_image(d, bp, footer_path, notes):
             notes.append("배너:실패")
-        _cursor_body_end(d, body_path)
-        _enter(d, body_path)
+        _cursor_body_end(d, bp)
+        _enter(d, bp)
 
     # 지도(장소) 첨부 — 설정에서 켠 경우에만 (실험 기능)
     map_note = ""
     if try_map and academy_name:
-        ok = _attach_map(d, body_path, academy_name, notes, log)
+        ok = _attach_map(d, _cur_path(state, paths), academy_name, notes, log)
         map_note = "지도 첨부됨 (위치 확인)" if ok else f"지도 자동첨부 실패 — '장소' 버튼에서 '{academy_name}' 직접 검색"
 
     # 마무리: 발행 방식대로
@@ -1040,5 +1086,5 @@ def post(title, body, image_paths=None, footer_path=None, publish_mode="draft",
         result.append(map_note)
     result.append(pub_note)
     if notes:
-        result.append("진단: " + " | ".join(notes[:6]))
+        result.append("진단: " + " | ".join(notes[-6:]))
     return "\n".join(result)
