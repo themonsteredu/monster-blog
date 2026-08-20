@@ -45,6 +45,9 @@ def _make_driver(profile_dir=None):
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-first-run")
     options.add_argument("--no-default-browser-check")
+    options.add_argument("--homepage=about:blank")
+    options.add_argument("--disable-search-engine-choice-screen")
+    options.add_argument("--disable-features=ChromeWhatsNewUI,PrivacySandboxSettings4")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
     # 광고·추적 스크립트까지 다 기다리면 get() 이 멈춘 것처럼 보인다 → 문서만 준비되면 진행
@@ -143,16 +146,36 @@ def close_driver():
 
 
 def _go(d, url, log=None):
-    """페이지 이동. 로딩이 오래 걸려도 멈추지 않고 넘어간다."""
-    try:
-        d.get(url)
-    except Exception as e:
-        if log:
-            log(f"   (로딩이 길어 그대로 진행합니다: {type(e).__name__})")
+    """페이지 이동. 로딩이 오래 걸려도 멈추지 않고 넘어가며, 실제 도착 주소를 기록한다."""
+    want = url.split("//")[-1].split("/")[0]      # 예: www.naver.com
+    for attempt in (1, 2):
         try:
-            d.execute_script("window.stop();")
-        except Exception:
-            pass
+            d.get(url)
+        except Exception as e:
+            if log:
+                log(f"   (로딩 지연 — 그대로 진행: {type(e).__name__})")
+            try:
+                d.execute_script("window.stop();")
+            except Exception:
+                pass
+        try:
+            now = d.current_url or ""
+        except Exception as e:
+            if log:
+                log(f"   ⚠ 크롬 응답 없음: {type(e).__name__}")
+            return False
+        if log:
+            log(f"   도착: {now[:70]}")
+        if want.split(".")[-2:] == now.split("//")[-1].split("/")[0].split(".")[-2:]:
+            return True
+        if attempt == 1:
+            if log:
+                log("   이동이 안 돼 주소창으로 다시 시도합니다…")
+            try:
+                d.execute_script("location.href = arguments[0];", url)
+                time.sleep(3)
+            except Exception:
+                pass
     return True
 
 
@@ -208,7 +231,10 @@ def ensure_login(naver_id, naver_pw, log=print, manual_wait=300):
     (한 번만 직접 로그인하면 전용 크롬 프로필에 저장돼 다음부터는 자동으로 통과된다.)"""
     log("크롬을 켜는 중…")
     d = get_driver(log)
-    log("크롬 준비 완료")
+    try:
+        log(f"크롬 준비 완료 (현재 주소: {(d.current_url or '')[:60]})")
+    except Exception:
+        log("크롬 준비 완료")
     log("네이버 접속 중…")
     if _logged_in(d, log):
         log("✓ 이미 로그인되어 있습니다 (저장된 세션 사용)")
