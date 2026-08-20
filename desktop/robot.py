@@ -99,56 +99,109 @@ def _select_all_delete(d):
 # ---------- 로그인 ----------
 
 def _logged_in(d):
-    d.get(NAVER_HOME)
-    time.sleep(2)
-    return len(d.find_elements(By.XPATH, "//*[contains(text(),'로그아웃')]")) > 0
+    """네이버 메인에서 로그인 상태인지 판별."""
+    try:
+        d.get(NAVER_HOME)
+        time.sleep(2)
+        if d.find_elements(By.XPATH, "//*[contains(text(),'로그아웃')]"):
+            return True
+        # 메인 화면 구조가 바뀌어도 잡히도록: 내 정보/알림 영역
+        return bool(d.find_elements(By.CSS_SELECTOR, ".MyView-module__link_login___HpHMW ~ *, .link_logout, a[href*='nid.naver.com/nidlogin.logout']"))
+    except Exception:
+        return False
 
 
-def ensure_login(naver_id, naver_pw, log=print, manual_wait=240):
-    """프로그램 안에서 받은 아이디/비번으로 로그인. 세션이 남아있으면 그대로 통과.
-    캡차 등으로 자동이 막히면, 열려있는 크롬 창에서 사람이 직접 마무리할 시간을 준다."""
+def _find_login_field(d, names, timeout=15):
+    """로그인 입력칸 찾기 — 네이버가 화면을 바꿔도 여러 이름으로 시도."""
+    end = time.time() + timeout
+    while time.time() < end:
+        for sel in names:
+            els = [e for e in d.find_elements(By.CSS_SELECTOR, sel) if e.is_displayed()]
+            if els:
+                return els[0]
+        time.sleep(0.5)
+    return None
+
+
+def ensure_login(naver_id, naver_pw, log=print, manual_wait=300):
+    """세션이 남아있으면 그냥 통과. 아니면 아이디/비번 자동 입력을 시도하되,
+    네이버가 자동 로그인을 막으므로 실패하면 사람이 크롬 창에서 직접 끝내도록 기다린다.
+    (한 번만 직접 로그인하면 전용 크롬 프로필에 저장돼 다음부터는 자동으로 통과된다.)"""
     d = get_driver()
     if _logged_in(d):
-        log("이미 로그인되어 있습니다. (저장된 세션 사용)")
+        log("✓ 이미 로그인되어 있습니다 (저장된 세션 사용)")
         return True
 
+    log("네이버 로그인 화면을 엽니다…")
     d.get(NAVER_LOGIN)
     time.sleep(2)
+    _bring_front(d)
+
+    typed = False
     if naver_id and naver_pw:
         try:
-            # 셀레늄 기본 타이핑(send_keys)이 가장 확실하다. 안 되면 CDP insertText 로 보강.
-            eid = d.find_element(By.CSS_SELECTOR, "#id")
-            eid.click(); time.sleep(0.2)
-            eid.send_keys(naver_id)
-            if not (eid.get_attribute("value") or ""):
-                _insert_text(d, naver_id)
-            time.sleep(0.3)
-            epw = d.find_element(By.CSS_SELECTOR, "#pw")
-            epw.click(); time.sleep(0.2)
-            epw.send_keys(naver_pw)
-            if not (epw.get_attribute("value") or ""):
-                _insert_text(d, naver_pw)
-            time.sleep(0.3)
-            if not (eid.get_attribute("value") or ""):
-                log("⚠ 아이디 입력이 안 됩니다 — 크롬 창에서 직접 로그인해 주세요.")
-            d.find_element(By.CSS_SELECTOR, "[id='log.login'], .btn_login").click()
-            time.sleep(3)
-        except Exception as e:
-            log(f"자동 입력이 막혔습니다 — 크롬 창에서 직접 로그인해 주세요. ({e})")
+            eid = _find_login_field(d, ["#id", "input[name='id']", "#loginId", "input[title*='아이디']"])
+            epw = _find_login_field(d, ["#pw", "input[name='pw']", "input[type='password']"], timeout=3)
+            if eid is None or epw is None:
+                log("아이디/비밀번호 칸을 못 찾았어요 — 크롬 창에서 직접 로그인해 주세요.")
+            else:
+                eid.click(); time.sleep(0.2)
+                eid.send_keys(naver_id)
+                if not (eid.get_attribute("value") or ""):
+                    _insert_text(d, naver_id)          # 예비 1
+                if not (eid.get_attribute("value") or "") and _clip_text(d, naver_id):
+                    eid.click(); time.sleep(0.2)       # 예비 2: 붙여넣기
+                    ActionChains(d).key_down(Keys.CONTROL).send_keys("v").key_up(Keys.CONTROL).perform()
+                time.sleep(0.3)
 
-    log("로그인 확인 중... 캡차/기기등록이 뜨면 '크롬 창에서 직접' 진행해 주세요.")
+                epw.click(); time.sleep(0.2)
+                epw.send_keys(naver_pw)
+                if not (epw.get_attribute("value") or ""):
+                    _insert_text(d, naver_pw)
+                if not (epw.get_attribute("value") or "") and _clip_text(d, naver_pw):
+                    epw.click(); time.sleep(0.2)
+                    ActionChains(d).key_down(Keys.CONTROL).send_keys("v").key_up(Keys.CONTROL).perform()
+                time.sleep(0.3)
+
+                id_ok = bool(eid.get_attribute("value"))
+                pw_ok = bool(epw.get_attribute("value"))
+                log(f"입력 상태 — 아이디 {'○' if id_ok else '×'} / 비밀번호 {'○' if pw_ok else '×'}")
+                if id_ok and pw_ok:
+                    typed = True
+                    btn = _find_login_field(d, ["[id='log.login']", ".btn_login", "button[type='submit']"], timeout=3)
+                    if btn is not None:
+                        btn.click()
+                        time.sleep(3)
+                    else:
+                        epw.send_keys(Keys.ENTER)
+                        time.sleep(3)
+        except Exception as e:
+            log(f"자동 입력 중 문제: {type(e).__name__}")
+
+    if typed:
+        log("로그인 시도했습니다. 캡차·기기등록이 뜨면 크롬 창에서 직접 진행해 주세요.")
+    else:
+        log("⚠ 네이버가 자동 입력을 막았습니다 — 크롬 창에서 직접 로그인해 주세요.")
+    log("   (한 번만 직접 하면 다음부터는 자동으로 넘어갑니다)")
+
     end = time.time() + manual_wait
+    last = 0
     while time.time() < end:
         try:
             if "nid.naver.com" not in d.current_url:
                 time.sleep(1)
                 if _logged_in(d):
-                    log("로그인 완료. (다음부터는 자동 로그인됩니다)")
+                    log("✓ 로그인 완료! 다음부터는 이 단계를 건너뜁니다.")
                     return True
         except Exception:
+            log("크롬 창이 닫혔습니다.")
             return False
+        left = int(end - time.time())
+        if left // 60 != last // 60:      # 1분마다 남은 시간 안내
+            log(f"   로그인 대기 중… (남은 시간 약 {left // 60 + 1}분)")
+        last = left
         time.sleep(2)
-    log("로그인 대기 시간이 지났습니다.")
+    log("로그인 대기 시간이 지났습니다. 다시 [로그인]을 눌러주세요.")
     return False
 
 
