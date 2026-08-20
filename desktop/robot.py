@@ -151,15 +151,39 @@ def ensure_login(naver_id, naver_pw, log=print, manual_wait=240):
 # '본문 편집칸이 있는 프레임'을 찾아 기억해두고, 그 프레임 안에서 모든 작업을 한다.
 
 JS_HAS_BODY = """
-const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
-  || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
-return [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e)).length > 0;
-"""
+function __vb(){
+  const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+    || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+  const c = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => {
+    if (isTitle(e)) return false;
+    const r = e.getBoundingClientRect();
+    if (r.width < 100 || r.height < 15) return false;          // 크기 0 = 안 보이는 가짜
+    const st = window.getComputedStyle(e);
+    if (st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0) return false;
+    return true;
+  });
+  c.sort((a,b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height);
+  return c[0] || null;
+}
+return !!__vb();"""
 
 JS_FOCUS_BODY_END = """
-const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
-  || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
-const b = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0];
+function __vb(){
+  const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+    || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+  const c = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => {
+    if (isTitle(e)) return false;
+    const r = e.getBoundingClientRect();
+    if (r.width < 100 || r.height < 15) return false;          // 크기 0 = 안 보이는 가짜
+    const st = window.getComputedStyle(e);
+    if (st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0) return false;
+    return true;
+  });
+  c.sort((a,b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height);
+  return c[0] || null;
+}
+
+const b = __vb();
 if (!b) return false;
 b.focus();
 const r = document.createRange(); r.selectNodeContents(b); r.collapse(false);
@@ -168,30 +192,55 @@ return true;
 """
 
 JS_FIND_TITLE = """
-const inToolbar = el => !!el.closest('[class*="toolbar"], [class*="Toolbar"], [role="toolbar"]');
-const sels = ['input[placeholder*="제목"]', 'textarea[placeholder*="제목"]',
-  '[contenteditable="true"][data-placeholder*="제목"]', '.se-documentTitle [contenteditable="true"]',
-  '.se-section-documentTitle [contenteditable="true"]', '[class*="documentTitle"] [contenteditable="true"]'];
-for (const s of sels) {
-  const f = [...document.querySelectorAll(s)].filter(e => !inToolbar(e));
-  f.sort((a,b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
-  if (f[0]) return f[0];
+function __vt(){
+  const inToolbar = el => !!el.closest('[class*="toolbar"], [class*="Toolbar"], [role="toolbar"]');
+  const vis = e => {
+    const r = e.getBoundingClientRect();
+    if (r.width < 50 || r.height < 10) return false;
+    const st = window.getComputedStyle(e);
+    return !(st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0);
+  };
+  const sels = ['input[placeholder*="제목"]', 'textarea[placeholder*="제목"]',
+    '[contenteditable="true"][data-placeholder*="제목"]', '.se-documentTitle [contenteditable="true"]',
+    '.se-section-documentTitle [contenteditable="true"]', '[class*="documentTitle"] [contenteditable="true"]'];
+  for (const s of sels) {
+    const f = [...document.querySelectorAll(s)].filter(e => !inToolbar(e) && vis(e));
+    f.sort((a,b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
+    if (f[0]) return f[0];
+  }
+  return null;
 }
-return null;
-"""
+return __vt();"""
 
 JS_TITLE_FOCUSED = """
 const ae = document.activeElement;
 if (!ae) return false;
 if (ae.closest && ae.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) return true;
 const ph = (ae.getAttribute && ((ae.getAttribute('placeholder')||'') + (ae.getAttribute('data-placeholder')||'') + (ae.getAttribute('aria-label')||''))) || '';
-if (/제목/.test(ph)) return true;
-return false;
+return /제목/.test(ph);
 """
 
 JS_CHECK_TITLE = """
-const sel = 'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], .se-documentTitle [contenteditable="true"], .se-section-documentTitle [contenteditable="true"]';
-const t = document.querySelector(sel);
+function __vt(){
+  const inToolbar = el => !!el.closest('[class*="toolbar"], [class*="Toolbar"], [role="toolbar"]');
+  const vis = e => {
+    const r = e.getBoundingClientRect();
+    if (r.width < 50 || r.height < 10) return false;
+    const st = window.getComputedStyle(e);
+    return !(st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0);
+  };
+  const sels = ['input[placeholder*="제목"]', 'textarea[placeholder*="제목"]',
+    '[contenteditable="true"][data-placeholder*="제목"]', '.se-documentTitle [contenteditable="true"]',
+    '.se-section-documentTitle [contenteditable="true"]', '[class*="documentTitle"] [contenteditable="true"]'];
+  for (const s of sels) {
+    const f = [...document.querySelectorAll(s)].filter(e => !inToolbar(e) && vis(e));
+    f.sort((a,b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
+    if (f[0]) return f[0];
+  }
+  return null;
+}
+
+const t = __vt();
 if (!t) return false;
 const v = typeof t.value === 'string' ? t.value : (t.textContent || '');
 return v.indexOf(arguments[0]) !== -1;
@@ -203,21 +252,56 @@ return { res: document.querySelectorAll('.se-image-resource').length,
 """
 
 JS_FIND_BODY = """
-const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
-  || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
-return [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0] || null;
-"""
+function __vb(){
+  const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+    || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+  const c = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => {
+    if (isTitle(e)) return false;
+    const r = e.getBoundingClientRect();
+    if (r.width < 100 || r.height < 15) return false;          // 크기 0 = 안 보이는 가짜
+    const st = window.getComputedStyle(e);
+    if (st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0) return false;
+    return true;
+  });
+  c.sort((a,b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height);
+  return c[0] || null;
+}
+return __vb();"""
 
 JS_BODY_LEN = """
-const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
-  || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
-const b = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0];
-return b ? (b.textContent||'').length : -1;
-"""
+function __vb(){
+  const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+    || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+  const c = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => {
+    if (isTitle(e)) return false;
+    const r = e.getBoundingClientRect();
+    if (r.width < 100 || r.height < 15) return false;          // 크기 0 = 안 보이는 가짜
+    const st = window.getComputedStyle(e);
+    if (st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0) return false;
+    return true;
+  });
+  c.sort((a,b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height);
+  return c[0] || null;
+}
+const b = __vb(); return b ? (b.textContent||'').length : -1;"""
 
 JS_QUOTE_LASTLEN = """
-const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]'));
-const b = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0];
+function __vb(){
+  const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+    || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+  const c = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => {
+    if (isTitle(e)) return false;
+    const r = e.getBoundingClientRect();
+    if (r.width < 100 || r.height < 15) return false;          // 크기 0 = 안 보이는 가짜
+    const st = window.getComputedStyle(e);
+    if (st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0) return false;
+    return true;
+  });
+  c.sort((a,b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height);
+  return c[0] || null;
+}
+
+const b = __vb();
 if (!b) return -1;
 const qs = b.querySelectorAll(".se-quotation, .se-component-quotation, .se-quote, blockquote, [class*='quotation']");
 const last = qs[qs.length - 1];
@@ -227,11 +311,24 @@ return last ? (last.textContent||'').trim().length : -1;
 # 본문 한 줄을 '에디터 안에서' 한 글자씩 타이핑 (확장 background.js 의 검증된 방식).
 # CDP insertText 는 네이버 본문 에디터가 무시하는 경우가 있어 execCommand 로 입력한다.
 JS_TYPE_LINE = """
+function __vb(){
+  const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+    || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+  const c = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => {
+    if (isTitle(e)) return false;
+    const r = e.getBoundingClientRect();
+    if (r.width < 100 || r.height < 15) return false;          // 크기 0 = 안 보이는 가짜
+    const st = window.getComputedStyle(e);
+    if (st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0) return false;
+    return true;
+  });
+  c.sort((a,b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height);
+  return c[0] || null;
+}
+
 const line = arguments[0];
 const done = arguments[arguments.length - 1];
-const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
-  || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
-const b = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0];
+const b = __vb();
 if (!b) { done(false); return; }
 b.focus();
 const r = document.createRange(); r.selectNodeContents(b); r.collapse(false);
@@ -246,10 +343,24 @@ let i = 0;
 
 # 커서 위치 그대로 타이핑 (빈 인용구 박스 '안'에 문장을 넣을 때 — 끝으로 이동하지 않음)
 JS_TYPE_HERE = """
+function __vb(){
+  const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+    || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+  const c = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => {
+    if (isTitle(e)) return false;
+    const r = e.getBoundingClientRect();
+    if (r.width < 100 || r.height < 15) return false;          // 크기 0 = 안 보이는 가짜
+    const st = window.getComputedStyle(e);
+    if (st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0) return false;
+    return true;
+  });
+  c.sort((a,b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height);
+  return c[0] || null;
+}
+
 const text = arguments[0];
 const done = arguments[arguments.length - 1];
-const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]'));
-const b = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0];
+const b = __vb();
 const s = window.getSelection();
 if (!b || !s || !s.anchorNode || !b.contains(s.anchorNode)) { done(false); return; }
 let i = 0;
@@ -262,16 +373,27 @@ let i = 0;
 
 # 제목 예비 입력 (클릭+insertText 가 실패했을 때): 제목칸에 직접 넣고 이벤트를 쏜다
 JS_TITLE_FALLBACK = """
-const title = arguments[0];
-const inToolbar = el => !!el.closest('[class*="toolbar"], [class*="Toolbar"], [role="toolbar"]');
-const sels = ['input[placeholder*="제목"]', 'textarea[placeholder*="제목"]',
-  '[contenteditable="true"][data-placeholder*="제목"]', '.se-documentTitle [contenteditable="true"]',
-  '.se-section-documentTitle [contenteditable="true"]', '[class*="documentTitle"] [contenteditable="true"]'];
-let t = null;
-for (const s of sels) {
-  const f = [...document.querySelectorAll(s)].filter(e => !inToolbar(e));
-  if (f[0]) { t = f[0]; break; }
+function __vt(){
+  const inToolbar = el => !!el.closest('[class*="toolbar"], [class*="Toolbar"], [role="toolbar"]');
+  const vis = e => {
+    const r = e.getBoundingClientRect();
+    if (r.width < 50 || r.height < 10) return false;
+    const st = window.getComputedStyle(e);
+    return !(st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0);
+  };
+  const sels = ['input[placeholder*="제목"]', 'textarea[placeholder*="제목"]',
+    '[contenteditable="true"][data-placeholder*="제목"]', '.se-documentTitle [contenteditable="true"]',
+    '.se-section-documentTitle [contenteditable="true"]', '[class*="documentTitle"] [contenteditable="true"]'];
+  for (const s of sels) {
+    const f = [...document.querySelectorAll(s)].filter(e => !inToolbar(e) && vis(e));
+    f.sort((a,b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
+    if (f[0]) return f[0];
+  }
+  return null;
 }
+
+const title = arguments[0];
+const t = __vt();
 if (!t) return false;
 t.focus();
 if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') {
@@ -322,9 +444,23 @@ return o || null;
 """
 
 JS_QUOTE_CITE = """
+function __vb(){
+  const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')
+    || /제목/.test((e.getAttribute('data-placeholder')||'') + (e.getAttribute('placeholder')||'') + (e.getAttribute('aria-label')||'')));
+  const c = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => {
+    if (isTitle(e)) return false;
+    const r = e.getBoundingClientRect();
+    if (r.width < 100 || r.height < 15) return false;          // 크기 0 = 안 보이는 가짜
+    const st = window.getComputedStyle(e);
+    if (st.visibility === 'hidden' || st.display === 'none' || parseFloat(st.opacity) === 0) return false;
+    return true;
+  });
+  c.sort((a,b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height);
+  return c[0] || null;
+}
+
 const sameText = arguments[0];
-const isTitle = (e) => !!(e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]'));
-const b = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => !isTitle(e))[0];
+const b = __vb();
 if (!b) return null;
 const boxes = b.querySelectorAll(".se-quotation, .se-component-quotation, blockquote, [class*='quotation']");
 const box = boxes[boxes.length - 1];
@@ -519,7 +655,7 @@ def _open_writer(d, log):
         time.sleep(2)
     if not body_paths:
         raise RuntimeError("글쓰기 화면(본문칸)을 찾지 못했습니다. 네이버에 로그인돼 있는지 확인하세요.")
-    log(f"본문 후보 프레임 {len(body_paths)}개 발견")
+    log(f"보이는 본문칸이 있는 프레임 {len(body_paths)}개 발견")
     # 방해 팝업 닫기 ("작성 중인 글", 도움말 등) — 모든 프레임에서. 팝업이 남아있으면
     # 제목 클릭이 가로막혀 제목 입력이 실패한다.
     for path in _frame_paths(d):
@@ -545,18 +681,17 @@ def _fill_title(d, body_path, title, notes, log):
     if el is None:
         notes.append("title:제목칸못찾음")
         return False
-    # 1차: 진짜 클릭으로 포커스 → trusted insertText
+    # 1차: 진짜 클릭으로 포커스 → trusted insertText (포커스 판정은 참고만)
     try:
         el.click()
         time.sleep(0.4)
-        if d.execute_script(JS_TITLE_FOCUSED):
-            _insert_text(d, title)
-            time.sleep(0.4)
-            if d.execute_script(JS_CHECK_TITLE, title[:5]):
-                return True
-            notes.append("title:insertText무반응")
-        else:
-            notes.append("title:포커스실패")
+        if not d.execute_script(JS_TITLE_FOCUSED):
+            notes.append("title:포커스확인안됨(그래도시도)")
+        _insert_text(d, title)
+        time.sleep(0.4)
+        if d.execute_script(JS_CHECK_TITLE, title[:5]):
+            return True
+        notes.append("title:insertText무반응")
     except Exception as e:
         notes.append(f"title:{type(e).__name__}")
     # 2차: 클릭된 상태에서 클립보드 + 진짜 Ctrl+V
@@ -608,7 +743,12 @@ def _cursor_body_end(d, body_path):
     try:
         el = d.execute_script(JS_FIND_BODY)
         if el is not None:
-            el.click()
+            try:
+                el.click()
+            except Exception:
+                d.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+                time.sleep(0.2)
+                el.click()
             time.sleep(0.15)
     except Exception:
         pass
