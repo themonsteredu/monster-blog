@@ -1,4 +1,4 @@
-# 몬스터 블로그 — 확장을 품은 설치형 프로그램 (v3.0)
+# 몬스터 블로그 — 확장을 품은 설치형 프로그램 (v3.1)
 
 크롬 확장프로그램을 **설치파일 하나로** 배포하는 방식입니다.
 고객은 개발자 모드도, 폴더 로드도 몰라도 됩니다.
@@ -33,6 +33,21 @@ python launcher/launcher.py
 1. `launcher\build_exe.bat` 더블클릭 → `launcher\dist\MonsterBlog\MonsterBlog.exe` 생성
 2. [Inno Setup](https://jrsoftware.org/isinfo.php)(무료) 설치 → `launcher\installer.iss` 열고 **Compile**
 3. `launcher\Output\MonsterBlogSetup.exe` → **고객에게 이 파일 하나만** 보내면 끝
+
+## 크롬 보안정책 관련 (중요)
+
+2025년부터 크롬은 명령줄로 확장을 자동 적재하는 `--load-extension` 을 기본 차단합니다.
+런처는 이 차단을 끄는 옵션(`--disable-features=DisableLoadExtensionCommandLineSwitch`)을
+함께 넘기지만, 크롬 버전에 따라 그래도 막힐 수 있습니다.
+
+그 경우 **처음 한 번만** 수동 등록하면 되고, 전용 프로필에 남으므로 이후에는 계속 유지됩니다.
+
+1. 런처의 **[📂 확장 폴더 열기]** 로 경로 확인 (`%USERPROFILE%\.monster_blog\extension`)
+2. 열린 크롬에서 `chrome://extensions` → 우측 상단 **개발자 모드** 켜기
+3. **압축해제된 확장 프로그램 로드** → 위 폴더 선택
+
+확장 폴더는 exe 안이 아니라 위 고정 경로로 복사되므로, 프로그램을 업데이트해도
+수동 등록이 풀리지 않습니다.
 
 ## 고객 사용 순서
 

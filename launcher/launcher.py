@@ -17,7 +17,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 
 APP_NAME = "몬스터 블로그"
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 
 # 확장 전용 크롬 프로필 (평소 쓰는 크롬과 분리 — 서로 방해하지 않는다)
 PROFILE_DIR = Path.home() / ".monster_blog" / "chrome"
@@ -43,6 +43,26 @@ def extension_dir():
     # 개발 중 예비 경로
     alt = Path(__file__).resolve().parent.parent / "extension"
     return alt if (alt / "manifest.json").exists() else None
+
+
+# 확장을 두는 고정 위치 (프로그램을 업데이트해도 경로가 바뀌지 않는다)
+INSTALLED_EXT = Path.home() / ".monster_blog" / "extension"
+
+
+def install_extension():
+    """포장된 확장을 고정 경로로 복사(갱신)하고 그 경로를 돌려준다."""
+    src = extension_dir()
+    if src is None:
+        return None
+    try:
+        import shutil
+        INSTALLED_EXT.parent.mkdir(parents=True, exist_ok=True)
+        if INSTALLED_EXT.exists():
+            shutil.rmtree(INSTALLED_EXT, ignore_errors=True)
+        shutil.copytree(src, INSTALLED_EXT)
+        return INSTALLED_EXT
+    except Exception:
+        return src if (src / "manifest.json").exists() else None
 
 
 def find_chrome():
@@ -84,7 +104,7 @@ def launch_chrome(url=WRITE_URL):
     if chrome is None:
         return False, "크롬이 설치되어 있지 않습니다.\ngoogle.com/chrome 에서 설치 후 다시 실행해 주세요."
 
-    ext = extension_dir()
+    ext = install_extension()
     if ext is None:
         return False, "확장 폴더를 찾지 못했습니다. 프로그램을 다시 설치해 주세요."
 
@@ -93,7 +113,8 @@ def launch_chrome(url=WRITE_URL):
         str(chrome),
         f"--user-data-dir={PROFILE_DIR}",
         f"--load-extension={ext}",
-        f"--disable-extensions-except={ext}",
+        # 최신 크롬(2025~)은 보안상 --load-extension 을 기본 차단한다. 그 차단을 끈다.
+        "--disable-features=DisableLoadExtensionCommandLineSwitch",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-search-engine-choice-screen",
@@ -112,8 +133,8 @@ class App(ctk.CTk):
         super().__init__()
         ctk.set_appearance_mode("light")
         self.title(f"{APP_NAME}  v{VERSION}")
-        self.geometry("560x520")
-        self.minsize(480, 460)
+        self.geometry("600x700")
+        self.minsize(540, 620)
         self.configure(fg_color="#eef1f4")
 
         f_title = ctk.CTkFont(family="Malgun Gothic", size=22, weight="bold")
@@ -146,18 +167,62 @@ class App(ctk.CTk):
         ctk.CTkLabel(guide, text="처음 한 번만 해주세요", font=f_head,
                      text_color=INK).pack(anchor="w", padx=18, pady=(14, 6))
         steps = (
-            "1.  크롬이 열리면 네이버에 로그인하세요.\n"
-            "     (한 번만 하면 다음부터는 계속 로그인 상태로 유지됩니다)\n\n"
-            "2.  주소창 오른쪽 퍼즐 모양(🧩) 아이콘을 누르고,\n"
-            "     '몬스터 블로그' 옆의 압정(📌)을 눌러 고정해 두세요.\n\n"
-            "3.  글쓰기 화면에서 그 아이콘을 누르면 도구가 열립니다.\n"
-            "     주제를 넣고 글 생성 → 네이버에 입력 → 발행."
+            "1.  크롬이 열리면 네이버에 로그인하세요. (이후 계속 유지됩니다)\n\n"
+            "2.  주소창 오른쪽 퍼즐(🧩) → '더몬스터학원 블로그 자동화' 옆\n"
+            "     압정(📌)을 눌러 고정하세요.\n\n"
+            "3.  글쓰기 화면에서 그 아이콘을 누르면 도구가 열립니다."
         )
         ctk.CTkLabel(guide, text=steps, font=f_body, text_color=INK,
-                     justify="left", anchor="w").pack(anchor="w", padx=18, pady=(0, 10))
+                     justify="left", anchor="w").pack(anchor="w", padx=18, pady=(0, 8))
+
+        ctk.CTkLabel(guide, text="🧩 목록에 도구가 안 보이면 (크롬 보안정책 때문)",
+                     font=f_head, text_color=INK).pack(anchor="w", padx=18, pady=(6, 4))
+        manual = (
+            "크롬 주소창에 chrome://extensions 입력 → 우측 상단 '개발자 모드' 켜기\n"
+            "→ '압축해제된 확장 프로그램 로드' → 아래 버튼으로 열리는 폴더 선택.\n"
+            "한 번만 하면 계속 유지됩니다."
+        )
+        ctk.CTkLabel(guide, text=manual, font=f_small, text_color=SUB,
+                     justify="left", anchor="w").pack(anchor="w", padx=18)
+        btns = ctk.CTkFrame(guide, fg_color="transparent")
+        btns.pack(fill="x", padx=18, pady=(8, 14))
+        ctk.CTkButton(btns, text="📂 확장 폴더 열기", height=36, corner_radius=8,
+                      font=f_body, fg_color="#f0f2f5", hover_color="#e3e6ea",
+                      text_color=INK, command=self.on_open_ext).pack(side="left")
+        ctk.CTkButton(btns, text="📋 폴더 경로 복사", height=36, corner_radius=8,
+                      font=f_body, fg_color="#f0f2f5", hover_color="#e3e6ea",
+                      text_color=INK, command=self.on_copy_path).pack(side="left", padx=8)
 
         self.status = ctk.CTkLabel(body, text="", font=f_small, text_color=SUB)
         self.status.pack(anchor="w", pady=(10, 0))
+
+    def on_open_ext(self):
+        """확장 폴더를 탐색기로 연다 (수동 등록할 때 이 폴더를 고르면 된다)."""
+        p = install_extension()
+        if p is None:
+            messagebox.showerror(APP_NAME, "확장 폴더를 찾지 못했습니다.")
+            return
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(str(p))
+            else:
+                subprocess.Popen(["xdg-open", str(p)])
+            self.status.configure(text=f"✓ 확장 폴더를 열었습니다: {p}", text_color=GREEN_DARK)
+        except Exception as e:
+            messagebox.showinfo(APP_NAME, f"확장 폴더 위치:\n{p}\n\n({e})")
+
+    def on_copy_path(self):
+        """폴더 경로를 클립보드에 복사 (탐색기 주소창에 붙여넣기용)."""
+        p = install_extension()
+        if p is None:
+            messagebox.showerror(APP_NAME, "확장 폴더를 찾지 못했습니다.")
+            return
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(str(p))
+            self.status.configure(text=f"✓ 경로를 복사했습니다: {p}", text_color=GREEN_DARK)
+        except Exception:
+            messagebox.showinfo(APP_NAME, f"확장 폴더 위치:\n{p}")
 
     def on_start(self):
         ok, msg = launch_chrome()
