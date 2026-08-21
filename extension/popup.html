@@ -58,6 +58,11 @@
       <input type="number" id="tb_bottom" step="0.5" title="아래 %" placeholder="아래 93.5" />
     </div>
 
+    <label>📎 하단 배너 이미지 (글 맨 끝에 항상 붙음)</label>
+    <input type="file" id="footerImg" accept="image/*" />
+    <div id="footerPreview" class="preview"></div>
+    <p class="hint">연락처·슬로건이 들어간 완성된 배너를 한 번 올려두면, 모든 글 맨 끝에 그대로 붙습니다.</p>
+
     <label>글 작성 규칙(전용 틀) — 고급</label>
     <textarea id="template" rows="4" placeholder="비워두면 위 학원 정보로 규칙을 자동 생성합니다"></textarea>
     <button id="saveSettings" class="ghost">설정 저장</button>
@@ -103,6 +108,10 @@
   <label style="display:flex;align-items:center;gap:6px">
     <input type="checkbox" id="usethumb" style="width:auto" checked />
     대표 썸네일 만들기 (템플릿 + 제목을 글 맨 앞에)
+  </label>
+  <label style="display:flex;align-items:center;gap:6px">
+    <input type="checkbox" id="usefooter" style="width:auto" checked />
+    하단 배너 넣기 (글 맨 끝에)
   </label>
   <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-top:12px">
     <input type="checkbox" id="trymap" style="width:auto" />

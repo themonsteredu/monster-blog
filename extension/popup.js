@@ -77,9 +77,10 @@ let currentProfile = fullProfile(null); // 저장된 학원 정보 (loadSettings
 const PROFILE_KEYS = ["name", "tagline", "phone", "sms", "kakao", "talktalk", "address", "hours", "region", "hashtags", "imgrule"];
 let thumbTemplate = "";                       // 썸네일 템플릿 이미지 (dataURL, 설정에 저장)
 let thumbBox = { left: 8.5, right: 91.5, top: 78, bottom: 93.5 };   // 제목 박스 위치(%)
+let footerImage = "";                         // 글 맨 끝에 붙일 하단 배너 (dataURL, 설정에 저장)
 
 function loadSettings() {
-  chrome.storage.local.get(["apiKey", "openaiKey", "template", "profile", "thumbTemplate", "thumbBox"], (s) => {
+  chrome.storage.local.get(["apiKey", "openaiKey", "template", "profile", "thumbTemplate", "thumbBox", "footerImage"], (s) => {
     if (s.apiKey) document.getElementById("apiKey").value = s.apiKey;
     if (s.openaiKey) document.getElementById("openaiKey").value = s.openaiKey;
     if (s.template) document.getElementById("template").value = s.template;
@@ -93,6 +94,11 @@ function loadSettings() {
       thumbTemplate = s.thumbTemplate;
       const prev = document.getElementById("myPhotoPreview");
       if (prev) prev.innerHTML = '<img src="' + thumbTemplate + '" alt="썸네일 템플릿">';
+    }
+    if (s.footerImage) {
+      footerImage = s.footerImage;
+      const fp = document.getElementById("footerPreview");
+      if (fp) fp.innerHTML = '<img src="' + footerImage + '" alt="하단 배너">';
     }
     if (s.thumbBox) thumbBox = Object.assign(thumbBox, s.thumbBox);
     for (const k of ["left", "right", "top", "bottom"]) {
@@ -124,6 +130,7 @@ document.getElementById("saveSettings").addEventListener("click", () => {
       profile,
       thumbTemplate,
       thumbBox,
+      footerImage,
     },
     () => setStatus("설정을 저장했습니다. (학원 정보·썸네일 템플릿이 글과 이미지에 반영됩니다)")
   );
@@ -154,6 +161,19 @@ if (myPhotoInput) {
     const prev = document.getElementById("myPhotoPreview");
     if (prev) prev.innerHTML = '<img src="' + thumbTemplate + '" alt="썸네일 템플릿">';
     setStatus("템플릿을 불러왔습니다. [🔍 썸네일 미리보기]로 확인하고 [설정 저장]을 누르세요.");
+  });
+}
+
+// 설정: 하단 배너 이미지 업로드 (글 맨 끝에 항상 붙는 그림)
+const footerInput = document.getElementById("footerImg");
+if (footerInput) {
+  footerInput.addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    footerImage = await shrinkIfHuge(await fileToDataURL(file), 1200);
+    const fp = document.getElementById("footerPreview");
+    if (fp) fp.innerHTML = '<img src="' + footerImage + '" alt="하단 배너">';
+    setStatus("하단 배너를 불러왔습니다. [설정 저장]을 눌러 보관하세요.");
   });
 }
 
@@ -384,6 +404,30 @@ async function drawThumbnail(templateDataUrl, text, box) {
   return canvasToImage(cv);
 }
 
+// dataURL 을 네이버 삽입용 형태로 (insertImage 가 기대하는 모양)
+function dataUrlToImage(dataUrl) {
+  const m = /^data:([^;]+);base64,(.*)$/.exec(dataUrl || "");
+  if (!m) return null;
+  return { media_type: m[1], data: m[2] };
+}
+
+// 너무 큰 원본은 가로 기준으로 줄인다 (저장·붙여넣기 속도 확보)
+async function shrinkIfHuge(dataUrl, maxW) {
+  try {
+    const im = await loadImage(dataUrl);
+    const w = im.naturalWidth || im.width;
+    const h = im.naturalHeight || im.height;
+    if (w <= maxW) return dataUrl;
+    const cv = document.createElement("canvas");
+    cv.width = maxW;
+    cv.height = Math.round((h * maxW) / w);
+    cv.getContext("2d").drawImage(im, 0, 0, cv.width, cv.height);
+    return cv.toDataURL("image/png");
+  } catch (_) {
+    return dataUrl;
+  }
+}
+
 function canvasToImage(cv) {
   return new Promise((resolve) => {
     cv.toBlob((blob) => {
@@ -606,10 +650,12 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
     }
   }
 
-  // 하단 연락처 배너 이미지 (글 맨 끝에 예쁘게 — 저장된 학원 정보 사용)
-  try {
-    payload.footer = await drawFooterBanner(currentProfile);
-  } catch (_) {}
+  // 하단 배너: 올린 이미지가 있으면 그걸 그대로, 없으면 예전 방식(학원 정보로 그린 배너)
+  if (document.getElementById("usefooter").checked) {
+    try {
+      payload.footer = footerImage ? dataUrlToImage(footerImage) : await drawFooterBanner(currentProfile);
+    } catch (_) {}
+  }
   // 지도 검색·톡톡에 쓸 학원 정보
   payload.academy = { name: currentProfile.name, talktalk: currentProfile.talktalk || "" };
   payload.tryMap = document.getElementById("trymap").checked;
