@@ -75,10 +75,11 @@ let currentProfile = fullProfile(null); // 저장된 학원 정보 (loadSettings
 
 // ---------- 설정 저장/불러오기 ----------
 const PROFILE_KEYS = ["name", "tagline", "phone", "sms", "kakao", "talktalk", "address", "hours", "region", "hashtags", "imgrule"];
-let profilePhoto = ""; // 대표 썸네일에 넣을 내 사진 (dataURL, 설정에 저장)
+let thumbTemplate = "";                       // 썸네일 템플릿 이미지 (dataURL, 설정에 저장)
+let thumbBox = { left: 8.5, right: 91.5, top: 78, bottom: 93.5 };   // 제목 박스 위치(%)
 
 function loadSettings() {
-  chrome.storage.local.get(["apiKey", "openaiKey", "template", "profile", "profilePhoto"], (s) => {
+  chrome.storage.local.get(["apiKey", "openaiKey", "template", "profile", "thumbTemplate", "thumbBox"], (s) => {
     if (s.apiKey) document.getElementById("apiKey").value = s.apiKey;
     if (s.openaiKey) document.getElementById("openaiKey").value = s.openaiKey;
     if (s.template) document.getElementById("template").value = s.template;
@@ -88,10 +89,15 @@ function loadSettings() {
       if (el && p[k]) el.value = p[k];
     }
     currentProfile = fullProfile(p);
-    if (s.profilePhoto) {
-      profilePhoto = s.profilePhoto;
+    if (s.thumbTemplate) {
+      thumbTemplate = s.thumbTemplate;
       const prev = document.getElementById("myPhotoPreview");
-      if (prev) prev.innerHTML = '<img src="' + profilePhoto + '" alt="내 사진">';
+      if (prev) prev.innerHTML = '<img src="' + thumbTemplate + '" alt="썸네일 템플릿">';
+    }
+    if (s.thumbBox) thumbBox = Object.assign(thumbBox, s.thumbBox);
+    for (const k of ["left", "right", "top", "bottom"]) {
+      const el = document.getElementById("tb_" + k);
+      if (el) el.value = thumbBox[k];
     }
     // 키가 아직 없으면 설정을 펼쳐서 안내
     if (!s.apiKey) document.getElementById("settings").open = true;
@@ -105,15 +111,21 @@ document.getElementById("saveSettings").addEventListener("click", () => {
     if (el) profile[k] = el.value.trim();
   }
   currentProfile = fullProfile(profile);
+  for (const k of ["left", "right", "top", "bottom"]) {
+    const el = document.getElementById("tb_" + k);
+    const v = el ? parseFloat(el.value) : NaN;
+    if (!isNaN(v)) thumbBox[k] = v;
+  }
   chrome.storage.local.set(
     {
       apiKey: document.getElementById("apiKey").value.trim(),
       openaiKey: document.getElementById("openaiKey").value.trim(),
       template: document.getElementById("template").value,
       profile,
-      profilePhoto,
+      thumbTemplate,
+      thumbBox,
     },
-    () => setStatus("설정을 저장했습니다. (학원 정보·내 사진이 글·썸네일·배너에 반영됩니다)")
+    () => setStatus("설정을 저장했습니다. (학원 정보·썸네일 템플릿이 글과 이미지에 반영됩니다)")
   );
 });
 
@@ -132,16 +144,44 @@ document.getElementById("photos").addEventListener("change", async (e) => {
   }
 });
 
-// 설정: 대표 썸네일에 쓸 '내 사진' 업로드 (한 번 넣어두면 계속 사용)
+// 설정: 썸네일 템플릿 이미지 업로드 (한 번 넣어두면 계속 사용)
 const myPhotoInput = document.getElementById("myPhoto");
 if (myPhotoInput) {
   myPhotoInput.addEventListener("change", async (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    profilePhoto = await fileToDataURL(file);
+    thumbTemplate = await fileToDataURL(file);
     const prev = document.getElementById("myPhotoPreview");
-    if (prev) prev.innerHTML = '<img src="' + profilePhoto + '" alt="내 사진">';
-    setStatus("내 사진을 불러왔습니다. [설정 저장]을 눌러 보관하세요.");
+    if (prev) prev.innerHTML = '<img src="' + thumbTemplate + '" alt="썸네일 템플릿">';
+    setStatus("템플릿을 불러왔습니다. [🔍 썸네일 미리보기]로 확인하고 [설정 저장]을 누르세요.");
+  });
+}
+
+// 설정: 썸네일 미리보기 — 지금 입력된 주제/제목으로 그려서 바로 보여준다
+const thumbPrevBtn = document.getElementById("previewThumb");
+if (thumbPrevBtn) {
+  thumbPrevBtn.addEventListener("click", async () => {
+    if (!thumbTemplate) {
+      setStatus("먼저 썸네일 템플릿 이미지를 올려주세요.", true);
+      return;
+    }
+    for (const k of ["left", "right", "top", "bottom"]) {
+      const el = document.getElementById("tb_" + k);
+      const v = el ? parseFloat(el.value) : NaN;
+      if (!isNaN(v)) thumbBox[k] = v;
+    }
+    const text =
+      document.getElementById("topic").value.trim() ||
+      document.getElementById("outTitle").value.trim() ||
+      "여기에 글 제목이 들어갑니다";
+    try {
+      const img = await drawThumbnail(thumbTemplate, text, thumbBox);
+      const box = document.getElementById("thumbPreview");
+      if (box) box.innerHTML = '<img src="data:image/png;base64,' + img.data + '" alt="썸네일 미리보기">';
+      setStatus("미리보기입니다. 글자 위치가 어긋나면 아래 숫자(%)를 조절하세요.");
+    } catch (err) {
+      setStatus("미리보기 실패: " + (err && err.message ? err.message : err), true);
+    }
   });
 }
 
@@ -289,73 +329,67 @@ function wrapText(ctx, text, maxW) {
   return lines;
 }
 
-// photoDataUrl: 설정에 저장한 내 사진(없으면 글자만) / topic: 썸네일에 크게 넣을 주제
-async function drawThumbnail(photoDataUrl, topic, p) {
-  const W = 1000, H = 1000;              // 네이버 대표 이미지는 정사각이 잘 잘린다
+// 제목 박스 기본 위치 (템플릿 이미지 크기 대비 비율 %)
+const DEFAULT_THUMB_BOX = { left: 8.5, right: 91.5, top: 78, bottom: 93.5 };
+
+// 템플릿 이미지를 배경으로 깔고, 빈 네모 박스 자리에 '제목만' 그려 넣는다.
+// 디자인은 사장님이 만든 템플릿 그대로 — 코드는 글자만 얹는다.
+async function drawThumbnail(templateDataUrl, text, box) {
+  if (!templateDataUrl) return null;
+  const b = Object.assign({}, DEFAULT_THUMB_BOX, box || {});
+  const im = await loadImage(templateDataUrl);
+
+  // 템플릿 원본 크기 그대로 (비율·화질 유지)
+  const W = im.naturalWidth || im.width;
+  const H = im.naturalHeight || im.height;
   const cv = document.createElement("canvas");
   cv.width = W;
   cv.height = H;
   const ctx = cv.getContext("2d");
+  ctx.drawImage(im, 0, 0, W, H);
 
-  // 배경: 브랜드 그린 그라데이션
-  const g = ctx.createLinearGradient(0, 0, W, H);
-  g.addColorStop(0, "#0f3d24");
-  g.addColorStop(1, "#1c6b3f");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, H);
-
-  // 내 사진: 아래쪽 가운데에 원형으로. 얼굴이 원 안에 꽉 차도록 '짧은 변 기준'으로 채운다.
-  const R = 215, CX = W / 2, CY = 655;
-  if (photoDataUrl) {
-    try {
-      const im = await loadImage(photoDataUrl);
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(CX, CY, R, 0, Math.PI * 2);
-      ctx.clip();
-      const scale = Math.max((R * 2) / im.width, (R * 2) / im.height);
-      const dw = im.width * scale, dh = im.height * scale;
-      // 증명사진은 얼굴이 가운데보다 살짝 위 → 그만큼만 올려 잡는다
-      ctx.drawImage(im, CX - dw / 2, CY - dh / 2 - dh * 0.04, dw, dh);
-      ctx.restore();
-      ctx.beginPath();
-      ctx.arc(CX, CY, R, 0, Math.PI * 2);
-      ctx.strokeStyle = "#8fe0b0";
-      ctx.lineWidth = 8;
-      ctx.stroke();
-    } catch (_) {}
+  // 제목이 들어갈 영역
+  const x0 = (b.left / 100) * W;
+  const x1 = (b.right / 100) * W;
+  const y0 = (b.top / 100) * H;
+  const y1 = (b.bottom / 100) * H;
+  const boxW = x1 - x0;
+  const boxH = y1 - y0;
+  const title = (text || "").trim();
+  if (!title || boxW <= 0 || boxH <= 0) {
+    return canvasToImage(cv);
   }
 
-  // 주제 글자: 위쪽에 크게. 3줄 안에 들어오도록 글자 크기를 자동으로 줄인다.
+  // 최대 2줄에 들어오고 박스 높이도 넘지 않도록 글자 크기를 자동으로 줄인다
   ctx.textBaseline = "top";
-  let size = 72;
+  ctx.fillStyle = "#2b2b2b";
+  let size = Math.round(H * 0.07);
+  const minSize = Math.round(H * 0.028);
   let lines = [];
-  for (; size >= 40; size -= 4) {
-    ctx.font = "bold " + size + "px 'Malgun Gothic', sans-serif";
-    lines = wrapText(ctx, topic, W - 190);
-    if (lines.length <= 3) break;
+  for (; size >= minSize; size -= 2) {
+    ctx.font = "bold " + size + "px 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
+    lines = wrapText(ctx, title, boxW);
+    if (lines.length <= 2 && lines.length * (size * 1.3) <= boxH) break;
   }
-  lines = lines.slice(0, 3);
-  const lh = Math.round(size * 1.32);
-  const blockH = lines.length * lh;
-  const y = Math.round(300 - blockH / 2);   // 사진 위 공간의 한가운데
-  ctx.fillStyle = "#8fe0b0";
-  ctx.fillRect(86, y - 8, 7, blockH + 16);  // 왼쪽 포인트 바
-  ctx.fillStyle = "#ffffff";
-  lines.forEach((l, i) => ctx.fillText(l, 116, y + i * lh));
+  lines = lines.slice(0, 2);
 
-  // 맨 아래 학원명 (사진과 겹치지 않게)
-  ctx.font = "34px 'Malgun Gothic', sans-serif";
-  ctx.fillStyle = "#d9f2e3";
-  const name = p && p.name ? p.name : "";
-  const nw = ctx.measureText(name).width;
-  ctx.fillText(name, (W - nw) / 2, H - 105);
+  // 박스 안에서 가로·세로 모두 가운데
+  const lh = Math.round(size * 1.3);
+  const startY = y0 + (boxH - lines.length * lh) / 2;
+  lines.forEach((l, i) => {
+    const w = ctx.measureText(l).width;
+    ctx.fillText(l, x0 + (boxW - w) / 2, startY + i * lh);
+  });
 
+  return canvasToImage(cv);
+}
+
+function canvasToImage(cv) {
   return new Promise((resolve) => {
-    cv.toBlob((b) => {
+    cv.toBlob((blob) => {
       const r = new FileReader();
       r.onload = () => resolve({ media_type: "image/png", data: r.result.split(",")[1] });
-      r.readAsDataURL(b);
+      r.readAsDataURL(blob);
     }, "image/png");
   });
 }
@@ -565,7 +599,8 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
   if (document.getElementById("usethumb").checked) {
     try {
       const topic = document.getElementById("topic").value.trim() || payload.title;
-      payload.thumb = await drawThumbnail(profilePhoto, topic, currentProfile);
+      payload.thumb = await drawThumbnail(thumbTemplate, topic, thumbBox);
+      if (!payload.thumb) setStatus("썸네일 템플릿이 없어 대표 이미지는 건너뜁니다. (설정에서 등록)");
     } catch (e) {
       setStatus("썸네일 생성 실패 — 그냥 진행합니다. (" + (e && e.message ? e.message : e) + ")", true);
     }
