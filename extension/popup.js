@@ -377,12 +377,60 @@ function loadImage(dataUrl) {
   });
 }
 
-// 한글은 아무 데서나 줄바꿈 가능 — 글자 단위로 자른다
-function wrapText(ctx, text, maxW) {
+// 제목 줄바꿈 — 단어(어절) 중간에서 자르지 않는다.
+// 한글은 아무 데서나 끊을 수 있지만, 제목이 "…준비해야 하 / 는 이유" 처럼 잘리면 어설프다.
+// ① 한 줄에 들어가면 한 줄  ② 두 줄이면 쉼표 같은 끊어 읽는 자리를 우선하고 두 줄 길이를 맞춤
+// ③ 공백이 없거나 한 어절이 너무 길면 그때만 글자 단위로 끊는다
+function wrapHeadline(ctx, text, maxW, maxLines) {
+  maxLines = maxLines || 2;
+  const t = (text || "").trim().replace(/\s+/g, " ");
+  if (!t) return [];
+  const W = (s) => ctx.measureText(s).width;
+
+  if (W(t) <= maxW) return [t];   // 한 줄이면 제일 보기 좋다
+
+  // 띄어쓰기 자리들을 후보로 두 줄 나누기
+  const words = t.split(" ");
+  if (words.length > 1) {
+    // 두 줄 모두 들어오는 후보를 모은다
+    const cands = [];
+    for (let i = 1; i < words.length; i++) {
+      const a = words.slice(0, i).join(" ");
+      const b = words.slice(i).join(" ");
+      const wa = W(a), wb = W(b);
+      if (wa > maxW || wb > maxW) continue;
+      cands.push({ a, b, gap: Math.abs(wa - wb), punct: /[,.!?·:;]$/.test(a) });
+    }
+    if (cands.length) {
+      // ① 쉼표·마침표 같은 '끊어 읽는 자리'가 있으면 그 자리를 우선한다(문맥이 맞음)
+      // ② 그런 자리가 여럿이거나 없으면, 두 줄 길이가 가장 비슷한 곳으로
+      const punct = cands.filter((c) => c.punct);
+      const pool = punct.length ? punct : cands;
+      pool.sort((x, y) => x.gap - y.gap);
+      return [pool[0].a, pool[0].b];
+    }
+
+    // 두 줄로는 안 되면 어절 단위로 순서대로 채운다 (maxLines 까지)
+    const lines = [];
+    let cur = "";
+    for (const w of words) {
+      const next = cur ? cur + " " + w : w;
+      if (W(next) > maxW && cur) {
+        lines.push(cur);
+        cur = w;
+      } else {
+        cur = next;
+      }
+    }
+    if (cur) lines.push(cur);
+    if (lines.every((l) => W(l) <= maxW)) return lines;
+  }
+
+  // 최후수단: 글자 단위 (공백 없는 제목이거나 한 어절이 통째로 긴 경우)
   const lines = [];
   let cur = "";
-  for (const ch of text) {
-    if (ctx.measureText(cur + ch).width > maxW && cur) {
+  for (const ch of t) {
+    if (W(cur + ch) > maxW && cur) {
       lines.push(cur.trim());
       cur = ch === " " ? "" : ch;
     } else cur += ch;
@@ -430,7 +478,7 @@ async function drawThumbnail(templateDataUrl, text, box) {
   let lines = [];
   for (; size >= minSize; size -= 2) {
     ctx.font = "bold " + size + "px 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
-    lines = wrapText(ctx, title, boxW);
+    lines = wrapHeadline(ctx, title, boxW, 2);
     if (lines.length <= 2 && lines.length * (size * 1.3) <= boxH) break;
   }
   lines = lines.slice(0, 2);
