@@ -17,7 +17,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 
 APP_NAME = "몬스터 블로그"
-VERSION = "3.1.0"
+VERSION = "3.2.0"
 
 # 확장 전용 크롬 프로필 (평소 쓰는 크롬과 분리 — 서로 방해하지 않는다)
 PROFILE_DIR = Path.home() / ".monster_blog" / "chrome"
@@ -115,6 +115,9 @@ def launch_chrome(url=WRITE_URL):
         f"--load-extension={ext}",
         # 최신 크롬(2025~)은 보안상 --load-extension 을 기본 차단한다. 그 차단을 끈다.
         "--disable-features=DisableLoadExtensionCommandLineSwitch",
+        # 확장이 chrome.debugger 로 '진짜 키보드 입력'을 넣는다(제목·인용구·사진·문단나눔).
+        # 이 옵션이 없으면 디버거 연결이 막히거나 경고바가 방해해 그 기능들이 전부 실패한다.
+        "--silent-debugger-extension-api",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-search-engine-choice-screen",
