@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
   "name": "더몬스터학원 블로그 자동화",
-  "version": "1.12.0",
+  "version": "1.13.0",
   "description": "사진/주제로 네이버 블로그 글을 만들고, 네이버 글쓰기 화면에 자동으로 입력합니다.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1ZmUTWwsh/2Tc7qk9T3VeWqs1nB9TxcZmbJOz8ydvV2LCT8AIPGHiyVmZTd2P0B57i/edimlANzAy0bctCcmiW77w0kqj29hFFFpgMLCpqHAB4GBxX8i8LJBES56TKEPDn+nRfMfY6d4wNUF/aNW7tVDXHAAkjZ/OS+OuwCdWW/UJgiI/TOewHBfuz40r9u5sA92MCr4UF1V5AOYTnge616qvRX+HXkKP6ze0v5eOF21w4wxKt99jiIx0rqIjIAalUlwK5GCVergT+nrUq795J+54wpNfffGd0FlEIoX+/NTbh8yaaVOW1nJtq5pLe11DUe4SnIdCT3v28rZcN2F7wIDAQAB",
   "permissions": [
     "storage",
     "scripting",

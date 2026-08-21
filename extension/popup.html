@@ -15,7 +15,21 @@
     <label>Claude(앤트로픽) API 키</label>
     <input type="password" id="apiKey" placeholder="sk-ant-..." />
     <label>OpenAI API 키 (선택 — AI 이미지 생성용)</label>
-    <input type="password" id="openaiKey" placeholder="sk-... (비우면 카드 이미지 자동 생성)" />
+    <input type="password" id="openaiKey" placeholder="sk-... (비우면 그림 없이 글만)" />
+
+    <label>🧠 글 생성 모델</label>
+    <select id="p_model">
+      <option value="claude-opus-5">최고 품질 (Opus 5) — 기본</option>
+      <option value="claude-sonnet-5">균형 (Sonnet 5)</option>
+      <option value="claude-haiku-4-5">빠르고 저렴 (Haiku 4.5)</option>
+      <option value="claude-sonnet-4-6">이전 버전 (Sonnet 4.6)</option>
+    </select>
+
+    <label>🎨 이미지 생성 모델</label>
+    <select id="p_imgmodel">
+      <option value="gpt-image-1">gpt-image-1 (기본)</option>
+      <option value="dall-e-3">dall-e-3</option>
+    </select>
 
     <div class="sect">🏫 우리 학원 정보 (글·하단 배너·지도에 자동 반영)</div>
     <label>학원명</label>
@@ -66,6 +80,11 @@
     <label>글 작성 규칙(전용 틀) — 고급</label>
     <textarea id="template" rows="4" placeholder="비워두면 위 학원 정보로 규칙을 자동 생성합니다"></textarea>
     <button id="saveSettings" class="ghost">설정 저장</button>
+    <p class="hint">💾 설정 옮기기 — 다른 컴퓨터로 옮기거나 되살릴 때 (⚠ API 키가 들어 있으니 남에게 주지 마세요)</p>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button id="exportSettings" class="ghost">📤 내보내기</button>
+      <input type="file" id="importSettings" accept="application/json,.json" />
+    </div>
     <p class="hint">키·학원 정보는 이 브라우저에만 저장됩니다(외부 전송 없음).</p>
   </details>
 
@@ -91,6 +110,13 @@
   <div id="photoPreview" class="preview"></div>
 
   <label>이미지 스타일 (사진 없이 쓸 때 참고)</label>
+  <label>이미지 방식</label>
+  <select id="imgmode">
+    <option value="photo">올린 사진 사용 (없으면 AI 생성)</option>
+    <option value="ai">AI로 생성</option>
+    <option value="none">넣지 않음</option>
+  </select>
+
   <select id="style">
     <option>일러스트</option>
     <option>실사</option>

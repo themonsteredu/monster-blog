@@ -426,29 +426,14 @@ function quoteCitePoint(sameText) {
 }
 
 // 본문 프레임의 사진 개수 (삽입 성공 판정용) — 제목 프레임은 0 반환
-// 본문의 사진 개수 (삽입 성공 판정용)
+// 사진 개수 (삽입 성공 판정용).
+// ★ 반드시 '문서 전체'를 세야 한다 — 네이버는 삽입된 사진을 본문 편집칸 안이 아니라
+//   형제 컴포넌트(.se-component.se-image)로 만들기 때문에, 편집칸 안만 세면 항상 0이 나오고
+//   그 결과 예비 삽입 경로가 줄줄이 실행되어 같은 사진이 여러 장 들어간다.
 function countImages() {
-  // 제목 요소인가 — placeholder 문구가 바뀌어도 '구조'(컨테이너 클래스)로 잡는다
-  const isTitleEl = (e) => !!(
-    (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) ||
-    /제목/.test((e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || ""))
-  );
-  // 본문 편집칸 — 제목은 무조건 제외하고, 보이는 것 중 가장 큰 것
-  const bodyOf = () => {
-    const all = [...document.querySelectorAll('[contenteditable="true"]')].filter((e) => !isTitleEl(e));
-    const vis = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 100 && r.height > 20; });
-    const pool = vis.length ? vis : all;
-    pool.sort((a, b) => {
-      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
-      return rb.width * rb.height - ra.width * ra.height;
-    });
-    return pool[0] || null;
-  };
-  const b = bodyOf();
-  const scope = b || document;
   return {
-    res: scope.querySelectorAll(".se-image-resource").length,
-    img: scope.querySelectorAll("img").length,
+    res: document.querySelectorAll(".se-image-resource").length,
+    img: document.querySelectorAll("img").length,
   };
 }
 
@@ -1043,7 +1028,7 @@ async function insertImage(tabId, im, attached, notes) {
         };
         await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", commands: ["Paste"], ...key });
         await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...key });
-        if (await waitMoreImages(tabId, before, 12000)) return "A";
+        if (await waitMoreImages(tabId, before, 20000)) return "A";
         notes.push("A:붙여넣기 무반응");
       } else {
         notes.push("A:" + (wv || "클립보드 실패"));
@@ -1055,12 +1040,24 @@ async function insertImage(tabId, im, attached, notes) {
     notes.push("A:디버거 없음");
   }
 
+  // 예비 경로로 넘어가기 전에 한 번 더 센다 — A가 늦게 성공했을 수 있고,
+  // 그걸 실패로 보고 B·C를 돌리면 같은 사진이 두세 장 들어간다.
+  {
+    const now = await totalImages(tabId);
+    if (now.res > before.res || now.img > before.img) return "A(지연)";
+  }
+
   // B) 예비: 가짜 paste 이벤트
   try {
     await execAll(tabId, syntheticPaste, [im.data, im.media_type], notes, "B");
     if (await waitMoreImages(tabId, before, 5000)) return "B";
     notes.push("B:무반응");
   } catch (_) {}
+
+  {
+    const now = await totalImages(tabId);
+    if (now.res > before.res || now.img > before.img) return "B(지연)";
+  }
 
   // C) 예비: 가짜 드래그&드롭
   try {

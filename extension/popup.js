@@ -1,7 +1,6 @@
 // popup.js — 확장 팝업의 두뇌
 // 설정 저장 → 사진 읽기 → Claude API로 글 생성 → 네이버 글쓰기 화면으로 전송
 
-const MODEL = "claude-sonnet-4-6";
 
 // 학원 정보 기본값 (설정에서 비워두면 이걸 사용 = 더몬스터학원)
 const DEFAULT_PROFILE = {
@@ -15,6 +14,8 @@ const DEFAULT_PROFILE = {
   hours: "평일 오후 2시~밤 10시 / 토요일 오전 9시~오후 8시 30분",
   region: "계림동, 광주 동구, 광주",
   hashtags: "계림동수학학원, 광주수학학원, 동구수학학원",
+  model: "claude-opus-5",        // 글 생성 모델 (설정에서 선택)
+  imgmodel: "gpt-image-1",       // 이미지 생성 모델 (설정에서 선택)
   imgrule: "따뜻하고 깔끔한 분위기. 실제 학원·공부 현장 느낌. 사람 얼굴이 알아볼 수 있게 나오면 안 됨(뒷모습·손·소품 위주). 그림 안에 글자를 넣지 말 것.",
 };
 
@@ -74,7 +75,7 @@ let uploadedPhotos = []; // [{ media_type, data(base64) }]
 let currentProfile = fullProfile(null); // 저장된 학원 정보 (loadSettings 에서 갱신)
 
 // ---------- 설정 저장/불러오기 ----------
-const PROFILE_KEYS = ["name", "tagline", "phone", "sms", "kakao", "talktalk", "address", "hours", "region", "hashtags", "imgrule"];
+const PROFILE_KEYS = ["name", "tagline", "phone", "sms", "kakao", "talktalk", "address", "hours", "region", "hashtags", "imgrule", "model", "imgmodel"];
 let thumbTemplate = "";                       // 썸네일 템플릿 이미지 (dataURL, 설정에 저장)
 let thumbBox = { left: 8.5, right: 91.5, top: 78, bottom: 93.5 };   // 제목 박스 위치(%)
 let footerImage = "";                         // 글 맨 끝에 붙일 하단 배너 (dataURL, 설정에 저장)
@@ -161,6 +162,46 @@ if (myPhotoInput) {
     const prev = document.getElementById("myPhotoPreview");
     if (prev) prev.innerHTML = '<img src="' + thumbTemplate + '" alt="썸네일 템플릿">';
     setStatus("템플릿을 불러왔습니다. [🔍 썸네일 미리보기]로 확인하고 [설정 저장]을 누르세요.");
+  });
+}
+
+// 설정: 통째로 파일로 내보내기 / 가져오기
+// (다른 컴퓨터로 옮기거나, 확장을 지웠다 다시 깔 때를 위한 안전장치)
+const exportBtn = document.getElementById("exportSettings");
+if (exportBtn) {
+  exportBtn.addEventListener("click", () => {
+    chrome.storage.local.get(null, (all) => {
+      const blob = new Blob([JSON.stringify(all, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "몬스터블로그-설정.json";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+      setStatus("설정 파일을 저장했습니다. ⚠ API 키가 들어 있으니 남에게 주지 마세요.");
+    });
+  });
+}
+
+const importInput = document.getElementById("importSettings");
+if (importInput) {
+  importInput.addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const data = JSON.parse(r.result);
+        if (!data || typeof data !== "object") throw new Error("형식이 올바르지 않습니다");
+        chrome.storage.local.set(data, () => {
+          setStatus("설정을 불러왔습니다. 팝업을 닫았다 다시 열면 모두 반영됩니다.");
+          loadSettings();
+        });
+      } catch (err) {
+        setStatus("설정 파일을 읽지 못했습니다: " + (err && err.message ? err.message : err), true);
+      }
+    };
+    r.readAsText(file);
   });
 }
 
@@ -285,8 +326,9 @@ async function callClaude(apiKey, template, gltype, topic, keyword, core, style)
       "anthropic-dangerous-direct-browser-access": "true",
     },
     body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 4000,
+      model: currentProfile.model,
+      // 최신 모델은 '생각 과정' 토큰도 이 한도를 함께 쓴다. 4000이면 글이 중간에 잘릴 수 있어 넉넉히.
+      max_tokens: 16000,
       system: template,
       messages: [{ role: "user", content }],
     }),
@@ -569,7 +611,7 @@ async function genOpenAiImage(openaiKey, desc, style, i, total, rule) {
       "content-type": "application/json",
       authorization: "Bearer " + openaiKey,
     },
-    body: JSON.stringify({ model: "gpt-image-1", prompt, size: "1536x1024", n: 1 }),
+    body: JSON.stringify({ model: currentProfile.imgmodel || "gpt-image-1", prompt, size: "1536x1024", n: 1 }),
   });
   if (!res.ok) {
     let msg = "HTTP " + res.status;
@@ -599,9 +641,15 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
     body: ex.body,
     images: uploadedPhotos.map((p) => ({ media_type: p.media_type, data: p.data })),
   };
-  // 사진을 안 올렸을 때: OpenAI 키가 있으면 설정한 '이미지 규칙'대로 생성.
-  // 키가 없으면 아무 그림도 넣지 않는다 (예전의 인용구 카드 이미지는 없앰).
-  if (payload.images.length === 0 && /\[이미지\s*\d+\]/.test(payload.body)) {
+  // 이미지 방식: photo(올린 사진 우선) / ai(무조건 AI 생성) / none(그림 없음)
+  const imgMode = document.getElementById("imgmode").value;
+  if (imgMode === "none") {
+    payload.images = [];
+  } else if (imgMode === "ai") {
+    payload.images = [];   // 올린 사진이 있어도 AI로 새로 만든다
+  }
+
+  if (imgMode !== "none" && payload.images.length === 0 && /\[이미지\s*\d+\]/.test(payload.body)) {
     const openaiKey = document.getElementById("openaiKey").value.trim();
     const style = document.getElementById("style").value;
     const markers = [...payload.body.matchAll(/^\[이미지\s*(\d+)\]\s*$/gm)].map((m) => parseInt(m[1], 10) - 1);
@@ -629,15 +677,16 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
     } else {
       setStatus("사진·OpenAI 키가 없어 그림 없이 글만 넣습니다. (설정에 OpenAI 키를 넣으면 자동 생성)");
     }
-    // 그림이 없는 [이미지N] 자리는 본문에서 지운다 (빈 줄만 남지 않도록)
-    payload.body = payload.body
-      .split("\n")
-      .filter((l, i) => {
-        const m = l.trim().match(/^\[이미지\s*(\d+)\]\s*$/);
-        return !m || (payload.images && payload.images[parseInt(m[1], 10) - 1]);
-      })
-      .join("\n");
   }
+
+  // 그림이 없는 [이미지N] 자리는 본문에서 지운다 (마커 글자가 그대로 남지 않도록)
+  payload.body = payload.body
+    .split("\n")
+    .filter((l) => {
+      const m = l.trim().match(/^\[이미지\s*(\d+)\]\s*$/);
+      return !m || (payload.images && payload.images[parseInt(m[1], 10) - 1]);
+    })
+    .join("\n");
 
   // 대표 썸네일: 내 사진 + 글 주제. 글 맨 앞에 넣어야 네이버가 대표 이미지로 잡는다.
   if (document.getElementById("usethumb").checked) {
