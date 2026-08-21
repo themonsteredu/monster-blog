@@ -64,17 +64,57 @@ async function say(tabId, text, isError, hideAfter) {
 // ---------- 페이지 안에서 실행되는 함수들 (외부 변수 참조 금지 — 각자 selector 를 갖고 있음) ----------
 
 function scanFrame() {
-  const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  const eds = document.querySelectorAll('[contenteditable="true"]').length;
-  const titleEl = document.querySelector(sel);
-  return { hasTitle: !!titleEl, hasBody: !titleEl && eds > 0, eds, top: window === window.top };
+  // 제목 요소인가 — placeholder 문구가 바뀌어도 '구조'(컨테이너 클래스)로 잡는다
+  const isTitleEl = (e) => !!(
+    (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) ||
+    /제목/.test((e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || ""))
+  );
+  // 본문 편집칸 — 제목은 무조건 제외하고, 보이는 것 중 가장 큰 것
+  const bodyOf = () => {
+    const all = [...document.querySelectorAll('[contenteditable="true"]')].filter((e) => !isTitleEl(e));
+    const vis = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 100 && r.height > 20; });
+    const pool = vis.length ? vis : all;
+    pool.sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      return rb.width * rb.height - ra.width * ra.height;
+    });
+    return pool[0] || null;
+  };
+  // 제목 입력칸 — 툴바 버튼은 제외하고, 제목 컨테이너 안이거나 '제목' 안내문구를 가진 것 중 가장 넓은 것
+  const titleOf = () => {
+    const inToolbar = (el) => !!(el.closest && el.closest('[class*="toolbar"], [class*="Toolbar"], [role="toolbar"]'));
+    const cands = [...document.querySelectorAll('input, textarea, [contenteditable="true"]')].filter((e) => {
+      if (inToolbar(e)) return false;
+      if (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) return true;
+      const ph = (e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || "");
+      return /제목/.test(ph);
+    });
+    cands.sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
+    return cands[0] || null;
+  };
+  return {
+    hasTitle: !!titleOf(),
+    hasBody: !!bodyOf(),
+    eds: document.querySelectorAll('[contenteditable="true"]').length,
+    top: window === window.top,
+  };
 }
 
+
 function focusTitle() {
-  const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  const t = document.querySelector(sel);
+  // 제목 입력칸 — 툴바 버튼은 제외하고, 제목 컨테이너 안이거나 '제목' 안내문구를 가진 것 중 가장 넓은 것
+  const titleOf = () => {
+    const inToolbar = (el) => !!(el.closest && el.closest('[class*="toolbar"], [class*="Toolbar"], [role="toolbar"]'));
+    const cands = [...document.querySelectorAll('input, textarea, [contenteditable="true"]')].filter((e) => {
+      if (inToolbar(e)) return false;
+      if (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) return true;
+      const ph = (e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || "");
+      return /제목/.test(ph);
+    });
+    cands.sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
+    return cands[0] || null;
+  };
+  const t = titleOf();
   if (!t) return false;
   t.focus();
   if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") {
@@ -89,26 +129,48 @@ function focusTitle() {
   return true;
 }
 
+
 function checkTitle(prefix) {
-  const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  const t = document.querySelector(sel);
+  // 제목 입력칸 — 툴바 버튼은 제외하고, 제목 컨테이너 안이거나 '제목' 안내문구를 가진 것 중 가장 넓은 것
+  const titleOf = () => {
+    const inToolbar = (el) => !!(el.closest && el.closest('[class*="toolbar"], [class*="Toolbar"], [role="toolbar"]'));
+    const cands = [...document.querySelectorAll('input, textarea, [contenteditable="true"]')].filter((e) => {
+      if (inToolbar(e)) return false;
+      if (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) return true;
+      const ph = (e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || "");
+      return /제목/.test(ph);
+    });
+    cands.sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
+    return cands[0] || null;
+  };
+  const t = titleOf();
   if (!t) return false;
   const v = typeof t.value === "string" ? t.value : t.textContent || "";
   return v.indexOf(prefix) !== -1;
 }
 
-// 이 프레임에 제목칸이 있으면 그 내용이 비었는지 반환. 제목칸이 없으면 null(판단 불가)
+
+// 제목칸이 비어 있는지. 제목칸을 못 찾으면 null(판단 불가)
 function titleIsEmpty() {
-  const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"], .se-documentTitle [contenteditable="true"]';
-  const t = document.querySelector(sel);
+  // 제목 입력칸 — 툴바 버튼은 제외하고, 제목 컨테이너 안이거나 '제목' 안내문구를 가진 것 중 가장 넓은 것
+  const titleOf = () => {
+    const inToolbar = (el) => !!(el.closest && el.closest('[class*="toolbar"], [class*="Toolbar"], [role="toolbar"]'));
+    const cands = [...document.querySelectorAll('input, textarea, [contenteditable="true"]')].filter((e) => {
+      if (inToolbar(e)) return false;
+      if (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) return true;
+      const ph = (e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || "");
+      return /제목/.test(ph);
+    });
+    cands.sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
+    return cands[0] || null;
+  };
+  const t = titleOf();
   if (!t) return null;
   const v = (typeof t.value === "string" ? t.value : t.textContent || "").trim();
   return v.length === 0;
 }
 
-// 지금 커서(포커스)가 '제목' 영역 안에 있는지 — 제목에 확실히 들어갈 때만 입력하려는 안전장치
+
 function titleFocused() {
   const ae = document.activeElement;
   if (!ae) return false;
@@ -122,9 +184,19 @@ function titleFocused() {
 }
 
 function typeTitleFallback(title) {
-  const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  const t = document.querySelector(sel);
+  // 제목 입력칸 — 툴바 버튼은 제외하고, 제목 컨테이너 안이거나 '제목' 안내문구를 가진 것 중 가장 넓은 것
+  const titleOf = () => {
+    const inToolbar = (el) => !!(el.closest && el.closest('[class*="toolbar"], [class*="Toolbar"], [role="toolbar"]'));
+    const cands = [...document.querySelectorAll('input, textarea, [contenteditable="true"]')].filter((e) => {
+      if (inToolbar(e)) return false;
+      if (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) return true;
+      const ph = (e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || "");
+      return /제목/.test(ph);
+    });
+    cands.sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width);
+    return cands[0] || null;
+  };
+  const t = titleOf();
   if (!t) return false;
   t.focus();
   if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") {
@@ -148,16 +220,30 @@ function typeTitleFallback(title) {
   return v.indexOf(title.slice(0, 5)) !== -1;
 }
 
-// 본문 프레임에서만 동작: 커서를 본문 끝으로 (제목 프레임이면 스스로 건너뜀)
+
+// 커서를 본문 끝으로. (제목칸은 bodyOf 가 애초에 고르지 않으므로 제목 오염이 불가능)
 function focusBodyEnd() {
-  const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  if (document.querySelector(sel)) return false;
-  const bodyEl = document.querySelector('[contenteditable="true"]');
-  if (!bodyEl) return false;
-  bodyEl.focus();
+  // 제목 요소인가 — placeholder 문구가 바뀌어도 '구조'(컨테이너 클래스)로 잡는다
+  const isTitleEl = (e) => !!(
+    (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) ||
+    /제목/.test((e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || ""))
+  );
+  // 본문 편집칸 — 제목은 무조건 제외하고, 보이는 것 중 가장 큰 것
+  const bodyOf = () => {
+    const all = [...document.querySelectorAll('[contenteditable="true"]')].filter((e) => !isTitleEl(e));
+    const vis = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 100 && r.height > 20; });
+    const pool = vis.length ? vis : all;
+    pool.sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      return rb.width * rb.height - ra.width * ra.height;
+    });
+    return pool[0] || null;
+  };
+  const b = bodyOf();
+  if (!b) return false;
+  b.focus();
   const r = document.createRange();
-  r.selectNodeContents(bodyEl);
+  r.selectNodeContents(b);
   r.collapse(false);
   const s = window.getSelection();
   s.removeAllRanges();
@@ -165,19 +251,33 @@ function focusBodyEnd() {
   return true;
 }
 
-// 본문 프레임에서만 동작: 한 줄을 한 글자씩 입력.
+
+// 본문 끝에 한 줄을 한 글자씩 입력.
 // 줄바꿈은 여기서 하지 않는다 — 네이버가 스크립트 줄바꿈을 무시해 문단이 붙어버리므로,
 // 배경에서 '진짜 Enter 키'(sendEnter)를 따로 보낸다.
 async function typeOneLine(line) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  if (document.querySelector(sel)) return false;
-  const bodyEl = document.querySelector('[contenteditable="true"]');
-  if (!bodyEl) return false;
-  bodyEl.focus();
+  // 제목 요소인가 — placeholder 문구가 바뀌어도 '구조'(컨테이너 클래스)로 잡는다
+  const isTitleEl = (e) => !!(
+    (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) ||
+    /제목/.test((e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || ""))
+  );
+  // 본문 편집칸 — 제목은 무조건 제외하고, 보이는 것 중 가장 큰 것
+  const bodyOf = () => {
+    const all = [...document.querySelectorAll('[contenteditable="true"]')].filter((e) => !isTitleEl(e));
+    const vis = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 100 && r.height > 20; });
+    const pool = vis.length ? vis : all;
+    pool.sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      return rb.width * rb.height - ra.width * ra.height;
+    });
+    return pool[0] || null;
+  };
+  const b = bodyOf();
+  if (!b) return false;
+  b.focus();
   const r = document.createRange();
-  r.selectNodeContents(bodyEl);
+  r.selectNodeContents(b);
   r.collapse(false);
   const s = window.getSelection();
   s.removeAllRanges();
@@ -189,20 +289,33 @@ async function typeOneLine(line) {
   return true;
 }
 
+
 // 줄바꿈 예비용 (디버거 없을 때)
 function insertPara() {
-  const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  if (document.querySelector(sel)) return false;
-  const bodyEl = document.querySelector('[contenteditable="true"]');
-  if (!bodyEl) return false;
-  bodyEl.focus();
+  // 제목 요소인가 — placeholder 문구가 바뀌어도 '구조'(컨테이너 클래스)로 잡는다
+  const isTitleEl = (e) => !!(
+    (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) ||
+    /제목/.test((e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || ""))
+  );
+  // 본문 편집칸 — 제목은 무조건 제외하고, 보이는 것 중 가장 큰 것
+  const bodyOf = () => {
+    const all = [...document.querySelectorAll('[contenteditable="true"]')].filter((e) => !isTitleEl(e));
+    const vis = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 100 && r.height > 20; });
+    const pool = vis.length ? vis : all;
+    pool.sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      return rb.width * rb.height - ra.width * ra.height;
+    });
+    return pool[0] || null;
+  };
+  const b = bodyOf();
+  if (!b) return false;
+  b.focus();
   document.execCommand("insertParagraph", false, null);
   return true;
 }
 
-// 제목칸의 화면 좌표 (프레임 안이면 바깥 좌표로 환산) — 진짜 마우스 클릭용
-// 툴바 버튼(aria-label 에 '제목'이 있어도)은 제외하고, 실제 '제목 입력 영역'만 고른다.
+
 function titlePoint() {
   const toTop = (r, win) => {
     let x = r.left + Math.min(r.width / 2, 200);
@@ -265,10 +378,18 @@ function titlePoint() {
 
 // 인용구 박스의 '출처' 편집칸 좌표 (인용문과 같은 문장이 잘못 들어갔을 때 비우기용)
 function quoteCitePoint(sameText) {
-  const tSel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  if (document.querySelector(tSel)) return null;
-  const bodyEl = document.querySelector('[contenteditable="true"]');
+  const isTitleEl = (e) => !!(
+    (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) ||
+    /제목/.test((e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || ""))
+  );
+  const all = [...document.querySelectorAll('[contenteditable="true"]')].filter((e) => !isTitleEl(e));
+  const vis = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 100 && r.height > 20; });
+  const pool = vis.length ? vis : all;
+  pool.sort((a, b) => {
+    const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+    return rb.width * rb.height - ra.width * ra.height;
+  });
+  const bodyEl = pool[0];
   if (!bodyEl) return null;
   const toTop = (el, win) => {
     const rr = el.getBoundingClientRect();
@@ -305,20 +426,33 @@ function quoteCitePoint(sameText) {
 }
 
 // 본문 프레임의 사진 개수 (삽입 성공 판정용) — 제목 프레임은 0 반환
+// 본문의 사진 개수 (삽입 성공 판정용)
 function countImages() {
-  const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  if (document.querySelector(sel)) return { res: 0, img: 0 };
+  // 제목 요소인가 — placeholder 문구가 바뀌어도 '구조'(컨테이너 클래스)로 잡는다
+  const isTitleEl = (e) => !!(
+    (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) ||
+    /제목/.test((e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || ""))
+  );
+  // 본문 편집칸 — 제목은 무조건 제외하고, 보이는 것 중 가장 큰 것
+  const bodyOf = () => {
+    const all = [...document.querySelectorAll('[contenteditable="true"]')].filter((e) => !isTitleEl(e));
+    const vis = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 100 && r.height > 20; });
+    const pool = vis.length ? vis : all;
+    pool.sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      return rb.width * rb.height - ra.width * ra.height;
+    });
+    return pool[0] || null;
+  };
+  const b = bodyOf();
+  const scope = b || document;
   return {
-    res: document.querySelectorAll(".se-image-resource").length,
-    img: document.querySelectorAll("img").length,
+    res: scope.querySelectorAll(".se-image-resource").length,
+    img: scope.querySelectorAll("img").length,
   };
 }
 
-// 인용구/지도용 공통: 요소의 화면 좌표(맨 바깥 기준) 계산 문자열은 각 함수 안에 복제되어 있음
-// (executeScript 로 주입되는 함수는 외부 변수 참조 불가)
 
-// 인용구 버튼(+ 옆 ▾ 화살표) 좌표 — 어느 프레임이든 찾으면 반환
 function quoteBtnPoint() {
   const toTop = (el, win) => {
     const rr = el.getBoundingClientRect();
@@ -404,28 +538,56 @@ function quoteStyleOption() {
 }
 
 // 본문 프레임의 인용구 박스 개수 + 마지막 박스의 글자수
+// 본문의 인용구 박스 개수 + 마지막 박스의 글자수
 function quoteCount() {
-  const tSel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  if (document.querySelector(tSel)) return null;
-  const bodyEl = document.querySelector('[contenteditable="true"]');
-  if (!bodyEl) return null;
-  const qs = bodyEl.querySelectorAll(
+  // 제목 요소인가 — placeholder 문구가 바뀌어도 '구조'(컨테이너 클래스)로 잡는다
+  const isTitleEl = (e) => !!(
+    (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) ||
+    /제목/.test((e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || ""))
+  );
+  // 본문 편집칸 — 제목은 무조건 제외하고, 보이는 것 중 가장 큰 것
+  const bodyOf = () => {
+    const all = [...document.querySelectorAll('[contenteditable="true"]')].filter((e) => !isTitleEl(e));
+    const vis = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 100 && r.height > 20; });
+    const pool = vis.length ? vis : all;
+    pool.sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      return rb.width * rb.height - ra.width * ra.height;
+    });
+    return pool[0] || null;
+  };
+  const b = bodyOf();
+  if (!b) return null;
+  const qs = b.querySelectorAll(
     ".se-quotation, .se-component-quotation, .se-quote, blockquote, [class*='quotation'], [class*='se-quote']"
   );
   const last = qs[qs.length - 1];
   return { n: qs.length, lastLen: last ? (last.textContent || "").trim().length : -1 };
 }
 
+
 // 방금 만들어진 마지막 인용구 박스 '안'에 커서를 두고 문장을 타이핑
 async function typeInLastQuote(text) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const tSel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  if (document.querySelector(tSel)) return false;
-  const bodyEl = document.querySelector('[contenteditable="true"]');
-  if (!bodyEl) return false;
-  const boxes = bodyEl.querySelectorAll(
+  // 제목 요소인가 — placeholder 문구가 바뀌어도 '구조'(컨테이너 클래스)로 잡는다
+  const isTitleEl = (e) => !!(
+    (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) ||
+    /제목/.test((e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || ""))
+  );
+  // 본문 편집칸 — 제목은 무조건 제외하고, 보이는 것 중 가장 큰 것
+  const bodyOf = () => {
+    const all = [...document.querySelectorAll('[contenteditable="true"]')].filter((e) => !isTitleEl(e));
+    const vis = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 100 && r.height > 20; });
+    const pool = vis.length ? vis : all;
+    pool.sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      return rb.width * rb.height - ra.width * ra.height;
+    });
+    return pool[0] || null;
+  };
+  const b = bodyOf();
+  if (!b) return false;
+  const boxes = b.querySelectorAll(
     ".se-quotation, .se-component-quotation, .se-quote, blockquote, [class*='quotation'], [class*='se-quote']"
   );
   const box = boxes[boxes.length - 1];
@@ -436,7 +598,7 @@ async function typeInLastQuote(text) {
     return !/출처|cite|source/i.test(ph);
   });
   const target = areas[0] || box;
-  bodyEl.focus();
+  b.focus();
   const r = document.createRange();
   r.selectNodeContents(target);
   r.collapse(true);
@@ -451,16 +613,30 @@ async function typeInLastQuote(text) {
   return true;
 }
 
-// 커서 위치 그대로 타이핑 (빈 인용구 박스 '안'에 문장을 넣을 때 사용 — 끝으로 이동하지 않음)
+
+// 커서 위치 그대로 타이핑 (빈 인용구 박스 '안'에 문장을 넣을 때 — 끝으로 이동하지 않음)
 async function typeHere(text) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const tSel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  if (document.querySelector(tSel)) return false;
-  const bodyEl = document.querySelector('[contenteditable="true"]');
-  if (!bodyEl) return false;
+  // 제목 요소인가 — placeholder 문구가 바뀌어도 '구조'(컨테이너 클래스)로 잡는다
+  const isTitleEl = (e) => !!(
+    (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) ||
+    /제목/.test((e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || ""))
+  );
+  // 본문 편집칸 — 제목은 무조건 제외하고, 보이는 것 중 가장 큰 것
+  const bodyOf = () => {
+    const all = [...document.querySelectorAll('[contenteditable="true"]')].filter((e) => !isTitleEl(e));
+    const vis = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 100 && r.height > 20; });
+    const pool = vis.length ? vis : all;
+    pool.sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      return rb.width * rb.height - ra.width * ra.height;
+    });
+    return pool[0] || null;
+  };
+  const b = bodyOf();
+  if (!b) return false;
   const s = window.getSelection();
-  if (!s || !s.anchorNode || !bodyEl.contains(s.anchorNode)) return false;
+  if (!s || !s.anchorNode || !b.contains(s.anchorNode)) return false;
   for (const ch of text) {
     document.execCommand("insertText", false, ch);
     await sleep(8);
@@ -468,7 +644,6 @@ async function typeHere(text) {
   return true;
 }
 
-// ---------- 지도(장소) 첨부용 ----------
 
 function mapBtnPoint() {
   const toTop = (el, win) => {
@@ -709,30 +884,58 @@ function publishConfirmPoint() {
 }
 
 // 예비 1: 가짜 paste 이벤트 (에디터가 스크립트 paste 를 받아줄 경우)
+// 예비 1: 가짜 paste 이벤트 (에디터가 스크립트 paste 를 받아줄 경우)
 function syntheticPaste(b64, type) {
-  const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  if (document.querySelector(sel)) return false;
-  const bodyEl = document.querySelector('[contenteditable="true"]');
-  if (!bodyEl) return false;
-  bodyEl.focus();
+  // 제목 요소인가 — placeholder 문구가 바뀌어도 '구조'(컨테이너 클래스)로 잡는다
+  const isTitleEl = (e) => !!(
+    (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) ||
+    /제목/.test((e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || ""))
+  );
+  // 본문 편집칸 — 제목은 무조건 제외하고, 보이는 것 중 가장 큰 것
+  const bodyOf = () => {
+    const all = [...document.querySelectorAll('[contenteditable="true"]')].filter((e) => !isTitleEl(e));
+    const vis = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 100 && r.height > 20; });
+    const pool = vis.length ? vis : all;
+    pool.sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      return rb.width * rb.height - ra.width * ra.height;
+    });
+    return pool[0] || null;
+  };
+  const b = bodyOf();
+  if (!b) return false;
+  b.focus();
   const bin = atob(b64);
   const arr = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
   const file = new File([arr], "photo.png", { type });
   const dt = new DataTransfer();
   dt.items.add(file);
-  bodyEl.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt }));
+  b.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt }));
   return true;
 }
 
+
 // 예비 2: 가짜 드래그&드롭
 function syntheticDrop(b64, type) {
-  const sel =
-    'input[placeholder*="제목"], textarea[placeholder*="제목"], [contenteditable="true"][data-placeholder*="제목"], [aria-label*="제목"]';
-  if (document.querySelector(sel)) return false;
-  const bodyEl = document.querySelector('[contenteditable="true"]');
-  if (!bodyEl) return false;
+  // 제목 요소인가 — placeholder 문구가 바뀌어도 '구조'(컨테이너 클래스)로 잡는다
+  const isTitleEl = (e) => !!(
+    (e.closest && e.closest('.se-documentTitle, .se-section-documentTitle, [class*="documentTitle"]')) ||
+    /제목/.test((e.getAttribute("placeholder") || "") + (e.getAttribute("data-placeholder") || "") + (e.getAttribute("aria-label") || ""))
+  );
+  // 본문 편집칸 — 제목은 무조건 제외하고, 보이는 것 중 가장 큰 것
+  const bodyOf = () => {
+    const all = [...document.querySelectorAll('[contenteditable="true"]')].filter((e) => !isTitleEl(e));
+    const vis = all.filter((e) => { const r = e.getBoundingClientRect(); return r.width > 100 && r.height > 20; });
+    const pool = vis.length ? vis : all;
+    pool.sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+      return rb.width * rb.height - ra.width * ra.height;
+    });
+    return pool[0] || null;
+  };
+  const b = bodyOf();
+  if (!b) return false;
   const bin = atob(b64);
   const arr = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
@@ -740,13 +943,13 @@ function syntheticDrop(b64, type) {
   const dt = new DataTransfer();
   dt.items.add(file);
   const mk = (t) => new DragEvent(t, { bubbles: true, cancelable: true, composed: true, dataTransfer: dt });
-  bodyEl.dispatchEvent(mk("dragenter"));
-  bodyEl.dispatchEvent(mk("dragover"));
-  bodyEl.dispatchEvent(mk("drop"));
+  b.dispatchEvent(mk("dragenter"));
+  b.dispatchEvent(mk("dragover"));
+  b.dispatchEvent(mk("drop"));
   return true;
 }
 
-// 진짜 마우스 클릭 (CDP) — 가짜 click() 은 네이버 툴바가 무시함
+
 async function clickAt(tabId, pt) {
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y });
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: pt.x, y: pt.y, button: "left", clickCount: 1 });
@@ -996,13 +1199,14 @@ async function fillNaver(tabId, payload) {
             await clickAt(tabId, pt);
             await sleep(350);
             const focusedTitle = (await execAll(tabId, titleFocused)).some(Boolean);
-            if (focusedTitle) {
-              await cdp(tabId, "Input.insertText", { text: payload.title });
-              await sleep(350);
-              titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
+            if (!focusedTitle) notes.push("title:포커스확인안됨(그래도시도)");
+            await cdp(tabId, "Input.insertText", { text: payload.title });
+            await sleep(350);
+            titleOk = (await execAll(tabId, checkTitle, [payload.title.slice(0, 5)])).some(Boolean);
+            if (!titleOk) {
+              // 예비: 제목칸에 직접 넣기 (본문은 bodyOf 가 제목을 고르지 않으므로 오염 위험 없음)
+              titleOk = (await execAll(tabId, typeTitleFallback, [payload.title])).some(Boolean);
               if (!titleOk) notes.push("title:입력후확인안됨(" + (pt.tag || "") + ")");
-            } else {
-              notes.push("title:제목포커스실패(" + (pt.tag || "") + ") → 클립보드로");
             }
           } catch (e) {
             notes.push("title:" + (e && e.message ? e.message : e));
@@ -1036,6 +1240,16 @@ async function fillNaver(tabId, payload) {
         }
       }
       if (buf.length) segs.push({ t: "text", lines: buf });
+    }
+
+    // 5.5) 대표 썸네일 — 반드시 본문보다 먼저. 네이버는 '첫 이미지'를 대표로 잡는다.
+    let thumbOk = false;
+    if (payload.thumb && attached) {
+      await say(tabId, "대표 썸네일 넣는 중…");
+      await execAll(tabId, focusBodyEnd);
+      thumbOk = !!(await insertImage(tabId, payload.thumb, attached, notes));
+      if (!thumbOk) notes.push("썸네일:실패");
+      await sendEnter(tabId, attached);
     }
 
     // 6) 순서대로 입력 (글 → 사진 → 글 …) — 모든 프레임에 뿌리면 본문 프레임만 스스로 반응
@@ -1246,6 +1460,7 @@ async function fillNaver(tabId, payload) {
         ? `사진 ${imgOk}장 모두 넣었습니다`
         : `사진 ${imgOk}/${imgTotal}장`
       : "";
+    const thumbNote = payload.thumb ? (thumbOk ? "\n🖼️ 대표 썸네일 넣음" : "\n🖼️ 대표 썸네일 실패") : "";
     const quoteNotes = notes.filter((n) => n.indexOf("인용:") === 0);
     const quoteNote = quoteNotes.length ? "인용구 박스 일부 실패(문장은 들어감) — " + quoteNotes.slice(0, 2).join(" | ") : "";
     const mapNote = !mapTried
@@ -1258,7 +1473,7 @@ async function fillNaver(tabId, payload) {
     const diagLine = hasIssue ? "\n진단: " + notes.slice(0, 7).join(" | ") : "";
     await say(
       tabId,
-      `✅ ${titleNote}${imgNote ? "\n🖼️ " + imgNote : ""}${quoteNote ? "\n💬 " + quoteNote : ""}${mapNote}\n🚀 ${closeMsg}${diagLine}`,
+      `✅ ${titleNote}${thumbNote}${imgNote ? "\n🖼️ " + imgNote : ""}${quoteNote ? "\n💬 " + quoteNote : ""}${mapNote}\n🚀 ${closeMsg}${diagLine}`,
       hasIssue,
       50000
     );

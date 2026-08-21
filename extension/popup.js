@@ -15,6 +15,7 @@ const DEFAULT_PROFILE = {
   hours: "평일 오후 2시~밤 10시 / 토요일 오전 9시~오후 8시 30분",
   region: "계림동, 광주 동구, 광주",
   hashtags: "계림동수학학원, 광주수학학원, 동구수학학원",
+  imgrule: "따뜻하고 깔끔한 분위기. 실제 학원·공부 현장 느낌. 사람 얼굴이 알아볼 수 있게 나오면 안 됨(뒷모습·손·소품 위주). 그림 안에 글자를 넣지 말 것.",
 };
 
 // 저장된 값과 기본값을 합쳐 완전한 프로필로
@@ -73,10 +74,11 @@ let uploadedPhotos = []; // [{ media_type, data(base64) }]
 let currentProfile = fullProfile(null); // 저장된 학원 정보 (loadSettings 에서 갱신)
 
 // ---------- 설정 저장/불러오기 ----------
-const PROFILE_KEYS = ["name", "tagline", "phone", "sms", "kakao", "talktalk", "address", "hours", "region", "hashtags"];
+const PROFILE_KEYS = ["name", "tagline", "phone", "sms", "kakao", "talktalk", "address", "hours", "region", "hashtags", "imgrule"];
+let profilePhoto = ""; // 대표 썸네일에 넣을 내 사진 (dataURL, 설정에 저장)
 
 function loadSettings() {
-  chrome.storage.local.get(["apiKey", "openaiKey", "template", "profile"], (s) => {
+  chrome.storage.local.get(["apiKey", "openaiKey", "template", "profile", "profilePhoto"], (s) => {
     if (s.apiKey) document.getElementById("apiKey").value = s.apiKey;
     if (s.openaiKey) document.getElementById("openaiKey").value = s.openaiKey;
     if (s.template) document.getElementById("template").value = s.template;
@@ -86,6 +88,11 @@ function loadSettings() {
       if (el && p[k]) el.value = p[k];
     }
     currentProfile = fullProfile(p);
+    if (s.profilePhoto) {
+      profilePhoto = s.profilePhoto;
+      const prev = document.getElementById("myPhotoPreview");
+      if (prev) prev.innerHTML = '<img src="' + profilePhoto + '" alt="내 사진">';
+    }
     // 키가 아직 없으면 설정을 펼쳐서 안내
     if (!s.apiKey) document.getElementById("settings").open = true;
   });
@@ -104,8 +111,9 @@ document.getElementById("saveSettings").addEventListener("click", () => {
       openaiKey: document.getElementById("openaiKey").value.trim(),
       template: document.getElementById("template").value,
       profile,
+      profilePhoto,
     },
-    () => setStatus("설정을 저장했습니다. (학원 정보가 글·배너에 반영됩니다)")
+    () => setStatus("설정을 저장했습니다. (학원 정보·내 사진이 글·썸네일·배너에 반영됩니다)")
   );
 });
 
@@ -123,6 +131,19 @@ document.getElementById("photos").addEventListener("change", async (e) => {
     preview.appendChild(img);
   }
 });
+
+// 설정: 대표 썸네일에 쓸 '내 사진' 업로드 (한 번 넣어두면 계속 사용)
+const myPhotoInput = document.getElementById("myPhoto");
+if (myPhotoInput) {
+  myPhotoInput.addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    profilePhoto = await fileToDataURL(file);
+    const prev = document.getElementById("myPhotoPreview");
+    if (prev) prev.innerHTML = '<img src="' + profilePhoto + '" alt="내 사진">';
+    setStatus("내 사진을 불러왔습니다. [설정 저장]을 눌러 보관하세요.");
+  });
+}
 
 function fileToDataURL(file) {
   return new Promise((resolve, reject) => {
@@ -242,23 +263,20 @@ document.getElementById("copyBtn").addEventListener("click", () => {
   navigator.clipboard.writeText(body).then(() => setStatus("본문을 복사했습니다."));
 });
 
-// ---------- 카드 이미지 자동 생성 (사진을 안 올렸을 때 [이미지N] 자리용) ----------
-// 인용구/제목 문장을 넣은 깔끔한 카드 그림을 만든다. API·비용 없이 항상 동작.
-function drawCard(text, pal) {
-  const c1 = pal[0], c2 = pal[1], tc = pal[2];
-  const W = 1000, H = 640;
-  const cv = document.createElement("canvas");
-  cv.width = W;
-  cv.height = H;
-  const ctx = cv.getContext("2d");
-  const g = ctx.createLinearGradient(0, 0, W, H);
-  g.addColorStop(0, c1);
-  g.addColorStop(1, c2);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, H);
-  // 글자 줄바꿈 (한글은 아무 데서나 줄바꿈 가능 — 글자 단위)
-  ctx.font = "bold 46px 'Malgun Gothic', sans-serif";
-  const maxW = W - 280;
+// ---------- 대표 썸네일 (내 사진 + 글 주제) ----------
+// 네이버는 '본문 첫 이미지'를 대표 이미지로 잡는다. 그래서 이 그림을 글 맨 앞에 넣는다.
+// AI로 만들면 얼굴이 재현되지 않으므로, 설정에 저장한 내 사진 위에 주제를 얹어 직접 그린다.
+function loadImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => resolve(im);
+    im.onerror = reject;
+    im.src = dataUrl;
+  });
+}
+
+// 한글은 아무 데서나 줄바꿈 가능 — 글자 단위로 자른다
+function wrapText(ctx, text, maxW) {
   const lines = [];
   let cur = "";
   for (const ch of text) {
@@ -268,21 +286,71 @@ function drawCard(text, pal) {
     } else cur += ch;
   }
   if (cur.trim()) lines.push(cur.trim());
-  const shown = lines.slice(0, 4);
-  const lh = 68;
-  const blockH = shown.length * lh;
-  const y0 = (H - blockH) / 2;
-  // 왼쪽 세로 포인트 바
-  ctx.fillStyle = tc;
-  ctx.fillRect(100, y0 - 14, 7, blockH + 18);
-  // 본문
+  return lines;
+}
+
+// photoDataUrl: 설정에 저장한 내 사진(없으면 글자만) / topic: 썸네일에 크게 넣을 주제
+async function drawThumbnail(photoDataUrl, topic, p) {
+  const W = 1000, H = 1000;              // 네이버 대표 이미지는 정사각이 잘 잘린다
+  const cv = document.createElement("canvas");
+  cv.width = W;
+  cv.height = H;
+  const ctx = cv.getContext("2d");
+
+  // 배경: 브랜드 그린 그라데이션
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, "#0f3d24");
+  g.addColorStop(1, "#1c6b3f");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  // 내 사진: 아래쪽 가운데에 원형으로. 얼굴이 원 안에 꽉 차도록 '짧은 변 기준'으로 채운다.
+  const R = 215, CX = W / 2, CY = 655;
+  if (photoDataUrl) {
+    try {
+      const im = await loadImage(photoDataUrl);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(CX, CY, R, 0, Math.PI * 2);
+      ctx.clip();
+      const scale = Math.max((R * 2) / im.width, (R * 2) / im.height);
+      const dw = im.width * scale, dh = im.height * scale;
+      // 증명사진은 얼굴이 가운데보다 살짝 위 → 그만큼만 올려 잡는다
+      ctx.drawImage(im, CX - dw / 2, CY - dh / 2 - dh * 0.04, dw, dh);
+      ctx.restore();
+      ctx.beginPath();
+      ctx.arc(CX, CY, R, 0, Math.PI * 2);
+      ctx.strokeStyle = "#8fe0b0";
+      ctx.lineWidth = 8;
+      ctx.stroke();
+    } catch (_) {}
+  }
+
+  // 주제 글자: 위쪽에 크게. 3줄 안에 들어오도록 글자 크기를 자동으로 줄인다.
   ctx.textBaseline = "top";
-  shown.forEach((l, i) => ctx.fillText(l, 136, y0 + i * lh));
-  // 아래 학원명
-  ctx.font = "22px 'Malgun Gothic', sans-serif";
-  ctx.globalAlpha = 0.75;
-  ctx.fillText("더몬스터학원 · 광주 동구 계림동", 100, H - 72);
-  ctx.globalAlpha = 1;
+  let size = 72;
+  let lines = [];
+  for (; size >= 40; size -= 4) {
+    ctx.font = "bold " + size + "px 'Malgun Gothic', sans-serif";
+    lines = wrapText(ctx, topic, W - 190);
+    if (lines.length <= 3) break;
+  }
+  lines = lines.slice(0, 3);
+  const lh = Math.round(size * 1.32);
+  const blockH = lines.length * lh;
+  const y = Math.round(300 - blockH / 2);   // 사진 위 공간의 한가운데
+  ctx.fillStyle = "#8fe0b0";
+  ctx.fillRect(86, y - 8, 7, blockH + 16);  // 왼쪽 포인트 바
+  ctx.fillStyle = "#ffffff";
+  lines.forEach((l, i) => ctx.fillText(l, 116, y + i * lh));
+
+  // 맨 아래 학원명 (사진과 겹치지 않게)
+  ctx.font = "34px 'Malgun Gothic', sans-serif";
+  ctx.fillStyle = "#d9f2e3";
+  const name = p && p.name ? p.name : "";
+  const nw = ctx.measureText(name).width;
+  ctx.fillText(name, (W - nw) / 2, H - 105);
+
   return new Promise((resolve) => {
     cv.toBlob((b) => {
       const r = new FileReader();
@@ -290,31 +358,6 @@ function drawCard(text, pal) {
       r.readAsDataURL(b);
     }, "image/png");
   });
-}
-
-async function makeCardImages(body, title) {
-  const imgRe = /^\[이미지\s*(\d+)\]\s*$/;
-  const quoteRe = /^\[인용\]\s*(.*)$/;
-  const texts = []; // 이미지 번호(0부터) → 카드에 넣을 문장
-  let lastQuote = "";
-  for (const raw of body.split("\n")) {
-    const line = raw.trim();
-    let m;
-    if ((m = line.match(quoteRe))) lastQuote = m[1];
-    else if ((m = line.match(imgRe))) texts[parseInt(m[1], 10) - 1] = lastQuote || title;
-  }
-  const palettes = [
-    ["#eef7f0", "#cfe8d6", "#245c37"],
-    ["#eef3fb", "#d3e3f6", "#1f4e79"],
-    ["#fdf3ec", "#f5ddc7", "#8a4b2d"],
-    ["#f3f0fb", "#dfd6f2", "#4a3d7a"],
-  ];
-  const out = [];
-  for (let i = 0; i < texts.length; i++) {
-    if (texts[i] == null) continue;
-    out[i] = await drawCard(texts[i], palettes[i % palettes.length]);
-  }
-  return out;
 }
 
 // ---------- 하단 연락처 배너 이미지 (글자 나열 대신 예쁜 카드로) ----------
@@ -427,7 +470,7 @@ function markerContexts(body, title) {
   return ctx;
 }
 
-async function genOpenAiImage(openaiKey, desc, style, i, total) {
+async function genOpenAiImage(openaiKey, desc, style, i, total, rule) {
   const styleText =
     style === "실사"
       ? "실제 카메라로 찍은 듯한 자연스러운 사진 느낌(photorealistic). 과장 없이 담백하게."
@@ -441,7 +484,7 @@ async function genOpenAiImage(openaiKey, desc, style, i, total) {
   const prompt =
     `학원 블로그 글에 넣을 이미지 (${i + 1}번째, 총 ${total}장 중). 장면: ${desc}. ${styleText} ` +
     `구도: ${angles[i % angles.length]}. 같은 글의 다른 이미지들과 소재·구도가 겹치지 않게. ` +
-    "사람 얼굴이 알아볼 수 있게 나오면 안 됨(뒷모습·손·소품 위주). 이미지 안에 글자 넣지 말 것.";
+    (rule || "");   // ← 설정의 '이미지 규칙'이 여기에 붙는다
   const res = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: {
@@ -478,7 +521,8 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
     body: ex.body,
     images: uploadedPhotos.map((p) => ({ media_type: p.media_type, data: p.data })),
   };
-  // 사진을 안 올렸으면: OpenAI 키가 있으면 AI 이미지 생성, 없으면 카드 이미지
+  // 사진을 안 올렸을 때: OpenAI 키가 있으면 설정한 '이미지 규칙'대로 생성.
+  // 키가 없으면 아무 그림도 넣지 않는다 (예전의 인용구 카드 이미지는 없앰).
   if (payload.images.length === 0 && /\[이미지\s*\d+\]/.test(payload.body)) {
     const openaiKey = document.getElementById("openaiKey").value.trim();
     const style = document.getElementById("style").value;
@@ -491,27 +535,42 @@ document.getElementById("sendNaver").addEventListener("click", async () => {
         const idx = markers[i];
         setStatus(`AI 이미지 생성 중… (${i + 1}/${markers.length}) 장당 10~30초 걸려요.`);
         try {
-          imgs[idx] = await genOpenAiImage(openaiKey, ex.prompts[idx] || ctxMap[idx] || payload.title, style, i, markers.length);
+          imgs[idx] = await genOpenAiImage(
+            openaiKey, ex.prompts[idx] || ctxMap[idx] || payload.title, style, i, markers.length, currentProfile.imgrule
+          );
         } catch (e) {
           failMsg = e && e.message ? e.message : String(e);
           break;
         }
       }
       if (failMsg) {
-        setStatus("AI 이미지 실패(" + failMsg + ") → 카드 이미지로 대신 넣습니다.", true);
-        try {
-          payload.images = await makeCardImages(payload.body, payload.title);
-        } catch (_) {}
+        setStatus("AI 이미지 실패(" + failMsg + ") — 그림 없이 글만 넣습니다.", true);
       } else {
         payload.images = imgs;
       }
     } else {
-      setStatus("사진이 없어 카드 이미지를 만드는 중… (설정에 OpenAI 키를 넣으면 AI 실사/일러스트 생성)");
-      try {
-        payload.images = await makeCardImages(payload.body, payload.title);
-      } catch (_) {}
+      setStatus("사진·OpenAI 키가 없어 그림 없이 글만 넣습니다. (설정에 OpenAI 키를 넣으면 자동 생성)");
+    }
+    // 그림이 없는 [이미지N] 자리는 본문에서 지운다 (빈 줄만 남지 않도록)
+    payload.body = payload.body
+      .split("\n")
+      .filter((l, i) => {
+        const m = l.trim().match(/^\[이미지\s*(\d+)\]\s*$/);
+        return !m || (payload.images && payload.images[parseInt(m[1], 10) - 1]);
+      })
+      .join("\n");
+  }
+
+  // 대표 썸네일: 내 사진 + 글 주제. 글 맨 앞에 넣어야 네이버가 대표 이미지로 잡는다.
+  if (document.getElementById("usethumb").checked) {
+    try {
+      const topic = document.getElementById("topic").value.trim() || payload.title;
+      payload.thumb = await drawThumbnail(profilePhoto, topic, currentProfile);
+    } catch (e) {
+      setStatus("썸네일 생성 실패 — 그냥 진행합니다. (" + (e && e.message ? e.message : e) + ")", true);
     }
   }
+
   // 하단 연락처 배너 이미지 (글 맨 끝에 예쁘게 — 저장된 학원 정보 사용)
   try {
     payload.footer = await drawFooterBanner(currentProfile);

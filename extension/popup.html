@@ -40,6 +40,15 @@
     <input type="text" id="p_hashtags" placeholder="예: 계림동수학학원, 광주수학학원, 동구수학학원" />
 
     <label>전용 틀 (고급 — 비우면 위 정보로 자동 생성)</label>
+    <label>🖼️ 이미지 규칙 (AI가 그림 만들 때 지킬 것)</label>
+    <textarea id="p_imgrule" rows="3" placeholder="예: 따뜻한 파스텔 톤, 실제 교실 느낌, 사람 얼굴 없이 손·소품 위주, 그림 안에 글자 넣지 말 것"></textarea>
+
+    <label>📸 대표 썸네일에 넣을 내 사진</label>
+    <input type="file" id="myPhoto" accept="image/*" />
+    <div id="myPhotoPreview" class="preview"></div>
+    <p class="hint">한 번 넣어두면 계속 사용합니다. 이 사진 위에 글 주제를 얹어 대표 이미지를 만듭니다.</p>
+
+    <label>글 작성 규칙(전용 틀) — 고급</label>
     <textarea id="template" rows="4" placeholder="비워두면 위 학원 정보로 규칙을 자동 생성합니다"></textarea>
     <button id="saveSettings" class="ghost">설정 저장</button>
     <p class="hint">키·학원 정보는 이 브라우저에만 저장됩니다(외부 전송 없음).</p>
@@ -81,6 +90,10 @@
   <input type="datetime-local" id="pubwhen" style="display:none" />
   <p class="hint" id="pubhint" style="display:none">예약 시간을 고르세요. 그 시간에 네이버가 자동 발행합니다(컴퓨터 꺼도 됨).</p>
 
+  <label style="display:flex;align-items:center;gap:6px">
+    <input type="checkbox" id="usethumb" style="width:auto" checked />
+    대표 썸네일 만들기 (내 사진 + 글 주제를 글 맨 앞에)
+  </label>
   <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-top:12px">
     <input type="checkbox" id="trymap" style="width:auto" />
     지도(장소) 자동 첨부 시도 — 실험 기능 (안 되면 끄세요)
