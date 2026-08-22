@@ -73,6 +73,14 @@
     <option value="time">시간 대비형</option>
     <option value="none">훅 없음</option>
   </select>
+  <div id="hookRecommendation" class="recommendation">
+    추천: <strong id="recommendedHook">입력 내용을 작성하면 분석합니다</strong>
+    <span id="recommendationReason"></span>
+  </div>
+  <label id="classificationEvidenceOption" class="inline-option">
+    <input type="checkbox" id="classificationUsesEvidence" />
+    실제 숫자·인원 근거를 분류에 사용
+  </label>
   <div id="hookEvidenceBox">
     <label id="hookEvidenceLabel">확인된 실제 근거 (선택)</label>
     <textarea id="hookEvidence" rows="3" placeholder="직접 확인한 숫자·기간·관찰 내용만 입력하세요"></textarea>

@@ -42,7 +42,8 @@ function loadSettings() {
       if (el && p[k]) el.value = p[k];
     }
     currentProfile = fullProfile(p);
-    recentHooks = Array.isArray(s.recentHooks) ? s.recentHooks.slice(-5) : [];
+    recentHooks = PromptHooks.normalizeHistory(s.recentHooks).slice(-50);
+    updateHookRecommendation();
     // 키가 아직 없으면 설정을 펼쳐서 안내
     if (!s.apiKey) document.getElementById("settings").open = true;
   });
@@ -69,7 +70,9 @@ document.getElementById("saveSettings").addEventListener("click", () => {
 // 근거가 필요한 훅은 입력칸을 필수로 표시한다. 자동 추천에서는 선택 사항이다.
 function updateHookEvidenceUI() {
   const type = document.getElementById("hookType").value;
-  const required = PromptHooks.requiresEvidence(type);
+  const classificationUsesEvidence = document.getElementById("classificationUsesEvidence").checked;
+  const required = PromptHooks.requiresEvidence(type, classificationUsesEvidence);
+  document.getElementById("classificationEvidenceOption").style.display = type === "classification" ? "flex" : "none";
   document.getElementById("hookEvidenceBox").style.display = (type === "auto" || required) ? "block" : "none";
   document.getElementById("hookEvidenceLabel").textContent = required
     ? "확인된 실제 근거 (필수)"
@@ -78,8 +81,35 @@ function updateHookEvidenceUI() {
     ? "입력한 사실만 사용합니다. 근거가 없으면 이 훅으로 글을 생성할 수 없습니다."
     : "근거가 있으면 자동 추천의 선택 폭이 넓어집니다. 입력하지 않은 사례나 수치는 생성하지 않습니다.";
 }
-document.getElementById("hookType").addEventListener("change", updateHookEvidenceUI);
+function hookInput() {
+  return {
+    gltype: document.getElementById("gltype").value,
+    topic: document.getElementById("topic").value.trim(),
+    keyword: document.getElementById("keyword").value.trim(),
+    core: document.getElementById("core").value.trim(),
+    evidence: document.getElementById("hookEvidence").value.trim(),
+  };
+}
+
+function updateHookRecommendation() {
+  const result = PromptHooks.recommend(hookInput(), recentHooks);
+  document.getElementById("recommendedHook").textContent = PromptHooks.HOOKS[result.type].label;
+  document.getElementById("recommendationReason").textContent = result.reason;
+  document.getElementById("hookRecommendation").style.display =
+    document.getElementById("hookType").value === "auto" ? "block" : "none";
+}
+
+function refreshHookUI() {
+  updateHookEvidenceUI();
+  updateHookRecommendation();
+}
+document.getElementById("hookType").addEventListener("change", refreshHookUI);
+document.getElementById("classificationUsesEvidence").addEventListener("change", refreshHookUI);
+for (const id of ["gltype", "topic", "keyword", "core", "hookEvidence"]) {
+  document.getElementById(id).addEventListener("input", updateHookRecommendation);
+}
 updateHookEvidenceUI();
+updateHookRecommendation();
 
 // ---------- 사진 읽기 ----------
 document.getElementById("photos").addEventListener("change", async (e) => {
@@ -133,7 +163,11 @@ document.getElementById("generate").addEventListener("click", async () => {
   const hook = PromptHooks.resolve(
     document.getElementById("hookType").value,
     document.getElementById("hookEvidence").value,
-    recentHooks
+    recentHooks,
+    {
+      input: hookInput(),
+      classificationUsesEvidence: document.getElementById("classificationUsesEvidence").checked,
+    }
   );
   if (hook.error) {
     setStatus(hook.error, true);
@@ -146,8 +180,9 @@ document.getElementById("generate").addEventListener("click", async () => {
   try {
     const text = await callClaude(apiKey, template, gltype, topic, keyword, core, style, hook);
     showResult(text);
-    recentHooks = recentHooks.concat(hook.type).slice(-5);
+    recentHooks = recentHooks.concat({ type: hook.type, usedAt: new Date().toISOString() }).slice(-50);
     chrome.storage.local.set({ recentHooks });
+    updateHookRecommendation();
     setStatus("완성! 내용을 확인하고 '네이버에 입력'을 누르세요.");
   } catch (err) {
     setStatus("오류: " + (err && err.message ? err.message : err), true);
