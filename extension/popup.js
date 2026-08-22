@@ -24,59 +24,15 @@ function fullProfile(p) {
   return out;
 }
 
-// 학원 정보로 '전용 틀'(시스템 프롬프트)을 자동 생성
-function buildTemplate(p) {
-  const region = (p.region || "").split(",").map((s) => s.trim()).filter(Boolean).join(", ");
-  return `당신은 ${p.name} 원장이 직접 쓰는 것처럼 자연스러운 네이버 블로그 글을 씁니다.
-
-[가장 중요한 출력 규칙]
-1. 마크다운 기호를 절대 쓰지 마세요(#, *, **, >, -, ---, 표, 백틱). 네이버는 마크다운을 못 읽어 기호가 그대로 보입니다. 줄바꿈과 평범한 문장으로만 구분하세요.
-2. 인용구(핵심 메시지 한 문장)는 그 줄 맨 앞에 [인용] 을 붙여 단독 줄로 넣으세요. 예: [인용] 학원이 문제인가, 아이가 문제인가 (따옴표·기호 없이).
-3. AI 티를 내지 마세요: "오늘은 ~알아보겠습니다", "결론적으로" 같은 정형구 금지, 과한 강조·이모지·체크리스트 금지, 같은 문장 구조 반복 금지.
-4. 모든 출력은 사람이 손으로 쓴 듯한 평범한 줄글이어야 합니다.
-
-[학원 정보]
-- 학원명: ${p.name}
-- 소개: ${p.tagline}
-- 말투: 친근하되 신뢰감 있게(학부모 대상 존댓말)
-
-[글 구조] 기호 없이 줄글로
-1) 제목 한 줄(맨 첫 줄, 기호 없이, 핵심 키워드를 앞쪽에)
-2) 도입 문단(학부모 고민에 공감하며 자연스럽게 시작)
-3) 아래 묶음을 2~3번 반복:
-   - 인용구 한 줄: 줄 맨 앞에 [인용] 을 붙여 핵심 메시지 한 문장
-   - 사진 자리: [이미지N] 을 그 줄에 단독으로(사진 올린 개수만큼)
-   - 본문 문단: 바로 위 인용구를 풀어 설명(학원 강점을 자연스럽게)
-4) 마무리 문단: 따뜻한 한두 문장으로 상담을 권하기.
-분량 약 1,500자. [인용]과 [이미지N]은 각각 그 줄에 단독으로 둘 것.
-
-[이미지 설명] 본문에 넣은 [이미지N] 개수만큼, 글 맨 끝에 "이미지N: 설명" 형식으로 한 줄씩 쓸 것.
-각 설명은 서로 완전히 다른 장면·소재·구도로 (예: 교실 전경 / 문제집 위의 손 클로즈업 / 칠판 앞 뒷모습 / 상담 테이블). 같은 소재 반복 금지.
-
-[네이버 AEO 규칙] 검색하는 사람의 질문에 바로 답하기
-- 핵심 키워드를 제목 앞쪽에 1번, 본문에 자연스럽게 3~5번(억지 반복 금지)
-- 도입부에서 독자가 검색했을 질문에 핵심 답을 한두 문장으로 먼저 제시
-- 소제목은 실제 검색하는 질문 형태로
-- 동의어·관련어를 섞고, 지역 키워드(${region})는 본문에 자연스럽게 포함
-- 구체적 롱테일을 노리고, 직접 겪은 사례로 신뢰도를 드러내기
-
-[마무리에서 하지 말 것 — 매우 중요]
-전화번호·문자·카카오톡·네이버 톡톡·운영시간·주소·지도 안내를 본문 마무리에 줄줄이 나열하지 마세요.
-그 정보는 앱이 글 맨 아래에 '예쁜 배너 이미지'로 깔끔하게 넣습니다. 본문에는 연락처·시간·주소를 반복해서 쓰지 마세요.
-마무리는 상담을 권하는 따뜻한 문장으로만 끝내세요.
-
-[최종 출력 순서]
-제목 / 본문(도입→본문+[이미지N]→따뜻한 마무리 문장) / 이미지 설명(이미지N: 한 줄씩) / 해시태그(# 붙여 10~15개. 다음을 포함: ${p.hashtags}, ${p.name})`;
-}
-
 let uploadedPhotos = []; // [{ media_type, data(base64) }]
 let currentProfile = fullProfile(null); // 저장된 학원 정보 (loadSettings 에서 갱신)
+let recentHooks = [];
 
 // ---------- 설정 저장/불러오기 ----------
 const PROFILE_KEYS = ["name", "tagline", "phone", "sms", "kakao", "talktalk", "address", "hours", "region", "hashtags"];
 
 function loadSettings() {
-  chrome.storage.local.get(["apiKey", "openaiKey", "template", "profile"], (s) => {
+  chrome.storage.local.get(["apiKey", "openaiKey", "template", "profile", "recentHooks"], (s) => {
     if (s.apiKey) document.getElementById("apiKey").value = s.apiKey;
     if (s.openaiKey) document.getElementById("openaiKey").value = s.openaiKey;
     if (s.template) document.getElementById("template").value = s.template;
@@ -86,6 +42,7 @@ function loadSettings() {
       if (el && p[k]) el.value = p[k];
     }
     currentProfile = fullProfile(p);
+    recentHooks = Array.isArray(s.recentHooks) ? s.recentHooks.slice(-5) : [];
     // 키가 아직 없으면 설정을 펼쳐서 안내
     if (!s.apiKey) document.getElementById("settings").open = true;
   });
@@ -108,6 +65,21 @@ document.getElementById("saveSettings").addEventListener("click", () => {
     () => setStatus("설정을 저장했습니다. (학원 정보가 글·배너에 반영됩니다)")
   );
 });
+
+// 근거가 필요한 훅은 입력칸을 필수로 표시한다. 자동 추천에서는 선택 사항이다.
+function updateHookEvidenceUI() {
+  const type = document.getElementById("hookType").value;
+  const required = PromptHooks.requiresEvidence(type);
+  document.getElementById("hookEvidenceBox").style.display = (type === "auto" || required) ? "block" : "none";
+  document.getElementById("hookEvidenceLabel").textContent = required
+    ? "확인된 실제 근거 (필수)"
+    : "확인된 실제 근거 (선택)";
+  document.getElementById("hookEvidenceHint").textContent = required
+    ? "입력한 사실만 사용합니다. 근거가 없으면 이 훅으로 글을 생성할 수 없습니다."
+    : "근거가 있으면 자동 추천의 선택 폭이 넓어집니다. 입력하지 않은 사례나 수치는 생성하지 않습니다.";
+}
+document.getElementById("hookType").addEventListener("change", updateHookEvidenceUI);
+updateHookEvidenceUI();
 
 // ---------- 사진 읽기 ----------
 document.getElementById("photos").addEventListener("change", async (e) => {
@@ -153,17 +125,29 @@ document.getElementById("generate").addEventListener("click", async () => {
     setStatus("주제를 입력하세요.", true);
     return;
   }
-  const template = document.getElementById("template").value.trim() || buildTemplate(currentProfile);
+  const template = document.getElementById("template").value.trim() || PromptBody.buildTemplate(currentProfile);
   const gltype = document.getElementById("gltype").value;
   const keyword = document.getElementById("keyword").value.trim();
   const core = document.getElementById("core").value.trim();
   const style = document.getElementById("style").value;
+  const hook = PromptHooks.resolve(
+    document.getElementById("hookType").value,
+    document.getElementById("hookEvidence").value,
+    recentHooks
+  );
+  if (hook.error) {
+    setStatus(hook.error, true);
+    document.getElementById("hookEvidence").focus();
+    return;
+  }
 
-  setStatus("글을 작성하는 중...");
+  setStatus(`글을 작성하는 중... (도입부: ${hook.label})`);
   setBusy(true);
   try {
-    const text = await callClaude(apiKey, template, gltype, topic, keyword, core, style);
+    const text = await callClaude(apiKey, template, gltype, topic, keyword, core, style, hook);
     showResult(text);
+    recentHooks = recentHooks.concat(hook.type).slice(-5);
+    chrome.storage.local.set({ recentHooks });
     setStatus("완성! 내용을 확인하고 '네이버에 입력'을 누르세요.");
   } catch (err) {
     setStatus("오류: " + (err && err.message ? err.message : err), true);
@@ -172,20 +156,12 @@ document.getElementById("generate").addEventListener("click", async () => {
   }
 });
 
-async function callClaude(apiKey, template, gltype, topic, keyword, core, style) {
-  let userText =
-    "아래 정보로 네이버 블로그 글을 작성해줘.\n\n" +
-    `- 글 종류: ${gltype}\n- 주제: ${topic}\n- 핵심(타겟) 키워드: ${keyword}\n` +
-    `- 핵심 내용: ${core}\n- 이미지 스타일: ${style}\n`;
+async function callClaude(apiKey, template, gltype, topic, keyword, core, style, hook) {
+  const input = { gltype, topic, keyword, core, style };
+  const userText = PromptBridge.compose(input, hook, uploadedPhotos.length);
 
   let content;
   if (uploadedPhotos.length > 0) {
-    const n = uploadedPhotos.length;
-    userText +=
-      `\n첨부한 사진 ${n}장을 잘 보고, 사진 내용과 어울리는 글을 써줘.\n` +
-      `사진이 들어갈 자리에 [이미지1]부터 [이미지${n}]까지 순서대로 본문에 한 줄씩 단독으로 배치하고,\n` +
-      `각 사진에 보이는 것을 자연스럽게 녹여줘. 사진 개수(${n}장)와 [이미지N] 개수를 똑같이 맞출 것.\n` +
-      `사진에 실제로 보이는 것만 쓰고, 사진에 없는 내용은 지어내지 마.`;
     content = uploadedPhotos.map((p) => ({
       type: "image",
       source: { type: "base64", media_type: p.media_type, data: p.data },
@@ -428,20 +404,23 @@ function markerContexts(body, title) {
 }
 
 async function genOpenAiImage(openaiKey, desc, style, i, total) {
-  const styleText =
-    style === "실사"
-      ? "실제 카메라로 찍은 듯한 자연스러운 사진 느낌(photorealistic). 과장 없이 담백하게."
+  const styleText = style === "교육현장 다큐멘터리"
+    ? "한국 소규모 초등·중등 수학학원의 실제 수업을 순간 포착한 교육현장 다큐멘터리 사진. 광고나 스톡사진처럼 연출하지 말고 자연광과 현실적인 학원 실내조명, 생활감 있는 색과 질감을 유지할 것."
+    : style === "실사"
+      ? "실제 카메라로 찍은 듯한 자연스럽고 담백한 사진."
       : "깔끔하고 따뜻한 플랫 일러스트 스타일. 부드러운 색감.";
-  const angles = [
-    "밝은 자연광이 드는 넓은 장면",
-    "소품 위주의 가까운 클로즈업",
-    "위에서 비스듬히 내려다본 구도",
-    "창가 또는 칠판을 배경으로 한 장면",
+  const roles = [
+    "대표 이미지: 한국 학생이 책상에서 수학 문제를 고민하는 실제 수업 장면. 얼굴 정면 클로즈업 대신 옆모습이나 뒷모습과 손을 중심으로",
+    "학습 디테일: 지우고 다시 푼 오답 흔적이 남은 수학 문제집, 연필과 지우개, 연필을 잡은 학생 손을 가까이 기록",
+    "상호작용: 선생님이 학생 옆에서 문제집의 풀이 과정을 함께 확인하는 자연스러운 순간. 두 사람의 시선은 풀이에 향하고 얼굴은 두드러지지 않게",
+    "공간 기록: 수업 뒤 교재, 연필, 지우개와 필기 흔적이 남아 있는 책상 및 소규모 교실의 현실적인 전경",
   ];
   const prompt =
-    `학원 블로그 글에 넣을 이미지 (${i + 1}번째, 총 ${total}장 중). 장면: ${desc}. ${styleText} ` +
-    `구도: ${angles[i % angles.length]}. 같은 글의 다른 이미지들과 소재·구도가 겹치지 않게. ` +
-    "사람 얼굴이 알아볼 수 있게 나오면 안 됨(뒷모습·손·소품 위주). 이미지 안에 글자 넣지 말 것.";
+    `학원 블로그 이미지 (${i + 1}번째, 총 ${total}장 중). 장면 맥락: ${desc}. ${styleText} ` +
+    `이번 이미지의 고유 역할: ${roles[i % roles.length]}. 다른 이미지와 역할·행동·소재·공간을 반복하지 말 것. ` +
+    "한국 학생의 실제 연령대와 평범한 복장, 사용감 있는 문제집·연필·지우개·필기·오답 흔적을 자연스럽게 표현할 것. " +
+    "과한 HDR, 영화식 색보정, 완벽하게 정돈된 광고 세트, 플라스틱 같은 AI 피부나 질감을 금지. " +
+    "얼굴 정면 클로즈업을 피하고 손·옆모습·뒷모습 중심으로 구성. 이미지 안에 읽을 수 있는 글자, 로고, 워터마크를 넣지 말 것.";
   const res = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: {
