@@ -62,14 +62,40 @@
   <label>핵심 내용</label>
   <textarea id="core" rows="3" placeholder="특강이면 일정·대상·수강료 / 정보글이면 다룰 포인트"></textarea>
 
+  <label>도입부 훅</label>
+  <select id="hookType">
+    <option value="auto">자동 추천</option>
+    <option value="number">숫자 충돌형</option>
+    <option value="misconception">오해 교정형</option>
+    <option value="scene">장면 재현형</option>
+    <option value="failure">실패 고백형</option>
+    <option value="classification">분류형</option>
+    <option value="time">시간 대비형</option>
+    <option value="none">훅 없음</option>
+  </select>
+  <div id="hookRecommendation" class="recommendation">
+    추천: <strong id="recommendedHook">입력 내용을 작성하면 분석합니다</strong>
+    <span id="recommendationReason"></span>
+  </div>
+  <label id="classificationEvidenceOption" class="inline-option">
+    <input type="checkbox" id="classificationUsesEvidence" />
+    실제 숫자·인원 근거를 분류에 사용
+  </label>
+  <div id="hookEvidenceBox">
+    <label id="hookEvidenceLabel">확인된 실제 근거 (선택)</label>
+    <textarea id="hookEvidence" rows="3" placeholder="직접 확인한 숫자·기간·관찰 내용만 입력하세요"></textarea>
+    <p class="hint" id="hookEvidenceHint">근거가 있으면 자동 추천의 선택 폭이 넓어집니다. 입력하지 않은 사례나 수치는 생성하지 않습니다.</p>
+  </div>
+
   <label>📷 사진 올리기 (직접 찍은 사진, 여러 장)</label>
   <input type="file" id="photos" accept="image/*" multiple />
   <div id="photoPreview" class="preview"></div>
 
   <label>이미지 스타일 (사진 없이 쓸 때 참고)</label>
   <select id="style">
-    <option>일러스트</option>
-    <option>실사</option>
+    <option value="교육현장 다큐멘터리">교육현장 다큐멘터리 (기본)</option>
+    <option value="일러스트">일러스트</option>
+    <option value="실사">일반 실사</option>
   </select>
 
   <label>발행 방식</label>
@@ -104,6 +130,9 @@
     <p class="hint">네이버 블로그 글쓰기 화면을 먼저 연 뒤 "네이버에 입력"을 누르세요.</p>
   </div>
 
+  <script src="prompts/hooks.js"></script>
+  <script src="prompts/body.js"></script>
+  <script src="prompts/bridge.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

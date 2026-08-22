@@ -90,7 +90,11 @@ with tab_write:
         "사진 선택", type=["png", "jpg", "jpeg"], accept_multiple_files=True, label_visibility="collapsed"
     )
 
-    style = st.radio("이미지 스타일 (사진 없이 AI 그림으로 만들 때만)", ["일러스트", "실사"], horizontal=True)
+    style = st.radio(
+        "이미지 스타일 (사진 없이 AI 그림으로 만들 때만)",
+        ["교육현장 다큐멘터리", "일러스트", "실사"],
+        horizontal=True,
+    )
     st.session_state["style"] = style
 
     if st.button("✨ 글 생성", type="primary"):
@@ -159,7 +163,7 @@ with tab_image:
                             try:
                                 imagegen.generate_image(
                                     settings["openai_api_key"], desc,
-                                    st.session_state.get("style", "일러스트"), str(out)
+                                    st.session_state.get("style", "교육현장 다큐멘터리"), str(out)
                                 )
                                 paths[label] = str(out)
                             except Exception as e:
