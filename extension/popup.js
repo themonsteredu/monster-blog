@@ -155,7 +155,10 @@ document.getElementById("generate").addEventListener("click", async () => {
     setStatus("주제를 입력하세요.", true);
     return;
   }
-  const template = document.getElementById("template").value.trim() || PromptBody.buildTemplate(currentProfile);
+  const template = PromptBody.buildSystemPrompt(
+    currentProfile,
+    document.getElementById("template").value
+  );
   const gltype = document.getElementById("gltype").value;
   const keyword = document.getElementById("keyword").value.trim();
   const core = document.getElementById("core").value.trim();

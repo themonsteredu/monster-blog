@@ -49,5 +49,12 @@
 제목 / 본문 / 이미지 설명 / 해시태그(# 포함 10~15개, ${p.hashtags}, ${p.name} 포함)`;
   }
 
-  self.PromptBody = { buildTemplate };
+  function buildSystemPrompt(p, customTemplate) {
+    const base = buildTemplate(p);
+    const custom = String(customTemplate || "").trim();
+    if (!custom) return base;
+    return `${base}\n\n[사용자 추가 전용 규칙]\n아래 규칙은 위 공통 규칙을 대체하지 않고 추가로 적용합니다. 충돌할 경우 위 사실성 안전 규칙과 글 구조를 우선하세요.\n${custom}`;
+  }
+
+  self.PromptBody = { buildTemplate, buildSystemPrompt };
 })();

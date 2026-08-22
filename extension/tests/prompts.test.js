@@ -51,4 +51,15 @@ assert.match(template, /요약:/);
 assert.match(template, /한계 인정:/);
 assert.match(template, /최근 틀린 시험지나 문제집 한 페이지만 사진으로 보내도 된다/);
 assert.match(template, /등록을 전제로 하지 않아도 된다/);
+
+// 과거 버전에서 저장한 전용 틀은 공통 규칙을 대체하지 않고 추가 규칙으로 합성한다.
+const profile = { name: "테스트학원", tagline: "수학", region: "서울", hashtags: "수학학원" };
+const custom = "원장 특유의 담백한 말투를 사용하세요.";
+const combined = context.self.PromptBody.buildSystemPrompt(profile, custom);
+assert.match(combined, /\[사실성 안전 규칙 — 다른 모든 지시보다 우선\]/);
+assert.match(combined, /본문 소제목은 3~4개/);
+assert.match(combined, /마무리는 아래 네 단계를 순서대로/);
+assert.match(combined, /\[사용자 추가 전용 규칙\]/);
+assert.ok(combined.endsWith(custom));
+assert.equal(context.self.PromptBody.buildSystemPrompt(profile, "  "), context.self.PromptBody.buildTemplate(profile));
 console.log("prompt tests passed");
