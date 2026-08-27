@@ -15,11 +15,11 @@ echo   OK popup.css
 curl.exe -L -s -o popup.js "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/popup.js?v=%V%"
 echo   OK popup.js
 curl.exe -L -s -o prompts\hooks.js "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/prompts/hooks.js?v=%V%"
-echo   - prompts/hooks.js OK
+echo   OK prompts/hooks.js
 curl.exe -L -s -o prompts\body.js "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/prompts/body.js?v=%V%"
-echo   - prompts/body.js OK
+echo   OK prompts/body.js
 curl.exe -L -s -o prompts\bridge.js "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/prompts/bridge.js?v=%V%"
-echo   - prompts/bridge.js OK
+echo   OK prompts/bridge.js
 curl.exe -L -s -o background.js "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/background.js?v=%V%"
 echo   OK background.js
 curl.exe -L -s -o content.js "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/content.js?v=%V%"
