@@ -1,0 +1,37 @@
+name: Verify SmartEditor fix
+
+on:
+  push:
+    branches:
+      - fix/naver-editor-title-quote-map
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: JavaScript and prompt regression checks
+        run: |
+          node --check extension/background.js
+          node --check extension/popup.js
+          node --check extension/content.js
+          node extension/tests/prompts.test.js
+      - name: Python and manifest checks
+        run: |
+          python -m json.tool extension/manifest.json >/dev/null
+          python -m compileall -q app.py generator.py images.py thumbnail.py naver_robot.py
+      - name: Windows updater integrity
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for name in ('extension/install.bat', 'extension/update.bat'):
+              data = Path(name).read_bytes()
+              assert b'\r\n' in data, f'{name}: CRLF missing'
+              assert data.replace(b'\r\n', b'').find(b'\n') == -1, f'{name}: bare LF found'
+              for required in (b'prompts\\hooks.js', b'prompts\\body.js', b'prompts\\bridge.js', b'background.js'):
+                  assert required in data, f'{name}: missing {required!r}'
+          PY
+          git diff --check
