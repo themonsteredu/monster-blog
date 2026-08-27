@@ -1,0 +1,41 @@
+name: Apply SmartEditor compatibility fix
+
+on:
+  push:
+    branches:
+      - fix/naver-editor-title-quote-map
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Apply compatibility patch
+        run: python scripts/apply_smarteditor_compat_fix.py
+
+      - name: Run regression checks
+        run: |
+          node --check extension/background.js
+          node --check extension/popup.js
+          node --check extension/content.js
+          node extension/tests/prompts.test.js
+          python -m json.tool extension/manifest.json >/dev/null
+          python -m compileall -q app.py generator.py images.py thumbnail.py naver_robot.py
+          git diff --check
+
+      - name: Commit patched files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: restore Naver title, quote, and map automation"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
