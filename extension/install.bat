@@ -5,6 +5,7 @@ echo   Monster Blog - install/update
 echo ================================
 echo Downloading latest files...
 set V=%RANDOM%
+if not exist prompts mkdir prompts
 curl.exe -L -s -o manifest.json "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/manifest.json?v=%V%"
 echo   OK manifest.json
 curl.exe -L -s -o popup.html "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/popup.html?v=%V%"
@@ -13,6 +14,12 @@ curl.exe -L -s -o popup.css "https://raw.githubusercontent.com/themonsteredu/mon
 echo   OK popup.css
 curl.exe -L -s -o popup.js "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/popup.js?v=%V%"
 echo   OK popup.js
+curl.exe -L -s -o prompts\hooks.js "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/prompts/hooks.js?v=%V%"
+echo   - prompts/hooks.js OK
+curl.exe -L -s -o prompts\body.js "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/prompts/body.js?v=%V%"
+echo   - prompts/body.js OK
+curl.exe -L -s -o prompts\bridge.js "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/prompts/bridge.js?v=%V%"
+echo   - prompts/bridge.js OK
 curl.exe -L -s -o background.js "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/background.js?v=%V%"
 echo   OK background.js
 curl.exe -L -s -o content.js "https://raw.githubusercontent.com/themonsteredu/monster-blog/main/extension/content.js?v=%V%"
